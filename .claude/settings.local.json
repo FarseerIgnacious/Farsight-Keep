@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check /Users/caleb/Desktop/dm-companion/renderer.js)",
+      "Bash(node --check /Users/caleb/Desktop/dm-companion/storage.js)",
+      "Read(//Users/caleb/.dm-companion/**)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(list\\(d.keys\\(\\)\\)\\); camp=list\\(d.values\\(\\)\\)[0]; print\\('type:', type\\(camp\\).__name__\\); print\\('has npcs:', 'npcs' in camp if isinstance\\(camp, dict\\) else 'array'\\); print\\('players:', len\\(camp.get\\('players',[]\\) if isinstance\\(camp,dict\\) else camp\\)\\); print\\('npcs:', len\\(camp.get\\('npcs',[]\\) if isinstance\\(camp,dict\\) else []\\)\\)\")",
+      "Bash(python3 *)",
+      "Bash(xargs ls -la)",
+      "Bash(npm list *)",
+      "Bash(node --check renderer.js)",
+      "Bash(mkdir -p /tmp/shots)",
+      "Bash(npm start *)",
+      "Bash(screencapture -x /tmp/shots/01-launch.png)",
+      "Bash(screencapture /tmp/shots/02-app.png)",
+      "Bash(pkill -f \"electron .\")",
+      "Bash(awk '/function buildCard/,/^function [a-zA-Z]/' /Users/caleb/Desktop/dm-companion/renderer.js)",
+      "Bash(awk '/function buildCard/,/^\\\\/\\\\/ ── Add Panel/' /Users/caleb/Desktop/dm-companion/renderer.js)",
+      "Bash(node --input-type=module)",
+      "Bash(node -e ' *)",
+      "Bash(node *)",
+      "Bash(grep -v \"^--$\")",
+      "Bash(grep -n 'type=\"number\".*value=\"\\\\${' /Users/caleb/Desktop/dm-companion/monster-builder.js)",
+      "Bash(pkill -f \"npm start\")",
+      "Bash(pkill -f electron)",
+      "Bash(printf %s\\\\n *)",
+      "Bash(awk '/^function npcbDraftFromNPC/,/^}$/' /Users/caleb/Desktop/dm-companion/npc-builder.js)",
+      "Bash(grep -n \"content.innerHTML = \\\\`\" /Users/caleb/Desktop/dm-companion/renderer.js)",
+      "Bash(lsof -ti:3000)",
+      "Bash(cp /mnt/user-data/uploads/Ignacious.PNG /Users/caleb/Desktop/dm-companion/assets/)",
+      "Bash(cp /mnt/user-data/uploads/Ignacious_Eye.PNG /Users/caleb/Desktop/dm-companion/assets/)",
+      "Bash(awk *)"
+    ]
+  }
+}
