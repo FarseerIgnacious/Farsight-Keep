@@ -185,6 +185,8 @@ function pcbDefaultDraft() {
     conditionImmune: [],
     senses: '',
     passive: '',
+    passiveInsight: null,
+    passiveInvestigation: null,
     languages: '',
 
     // Features
@@ -276,7 +278,6 @@ function pcbDraftFromPC(pc) {
     : []
 
   // Map spells from XML format to selectedSpells format
-  console.log('[pcbDraftFromPC] pc.spells before conversion:', pc.spells?.length, pc.spells?.[0])
   const selectedSpells = Array.isArray(pc.spells)
     ? pc.spells.map(s => ({
         name: s.name,
@@ -284,7 +285,6 @@ function pcbDraftFromPC(pc) {
         usage: 'slot' // Default to slot-based
       }))
     : []
-  console.log('[pcbDraftFromPC] selectedSpells after conversion:', selectedSpells.length, selectedSpells[0])
 
   // Parse spell slots from slots field (e.g. "4,3,3,3,2,1,0,0,0")
   const spellSlots = pc.slots
@@ -323,6 +323,8 @@ function pcbDraftFromPC(pc) {
     // Other
     senses: pc.senses || '',
     passive: pc.passive || '',
+    passiveInsight: pc.passiveInsight || null,
+    passiveInvestigation: pc.passiveInvestigation || null,
     languages: pc.languages || '',
 
     // Features
@@ -342,13 +344,13 @@ function pcbUpdateProficiency() {
   document.getElementById('pcb-prof-display').textContent = `+${prof}`
   mb.dirty = true
   pcb.dirty = true
+  // Update passive senses when proficiency changes
+  if (window.pcbUpdatePassiveSenses) pcbUpdatePassiveSenses()
 }
 
 function pcbUpdateSpellSlots() {
   const type = mb.draft.spellcastingType || 'None'
   const level = parseInt(mb.draft.level) || 1
-
-  console.log('pcbUpdateSpellSlots called:', { type, level, currentSlots: mb.draft.spellSlots })
 
   if (type === 'None' || type === 'Custom') {
     if (type === 'None') {
@@ -368,8 +370,6 @@ function pcbUpdateSpellSlots() {
   mb.dirty = true
   pcb.dirty = true
 
-  console.log('pcbUpdateSpellSlots updated slots to:', mb.draft.spellSlots)
-
   // Update only the slot grid, not the entire spells section
   const gridEl = document.getElementById('pcb-slot-grid')
   if (gridEl) {
@@ -383,6 +383,124 @@ function pcbUpdateInitiative() {
   mb.draft.initiativeBonus = mod
   const input = document.querySelector('input[onchange*="initiativeBonus"]')
   if (input) input.value = mod
+}
+
+function pcbUpdatePassiveSenses() {
+  const d = pcb.draft
+  if (!d) return
+
+  // Read current ability scores
+  const wis = parseInt(d.wis) || 10
+  const int = parseInt(d.int) || 10
+  const wisMod = Math.floor((wis - 10) / 2)
+  const intMod = Math.floor((int - 10) / 2)
+
+  // Read skills array
+  const skills = d.skills || []
+  const perceptionSkill = skills.find(sk => sk.name === 'Perception')
+  const insightSkill = skills.find(sk => sk.name === 'Insight')
+  const investigationSkill = skills.find(sk => sk.name === 'Investigation')
+
+  // Calculate auto values
+  // Note: skill.modifier already includes ability mod + proficiency bonus
+  const autoPassivePerception = perceptionSkill
+    ? 10 + perceptionSkill.modifier
+    : 10 + wisMod
+
+  const autoPassiveInsight = insightSkill
+    ? 10 + insightSkill.modifier
+    : 10 + wisMod
+
+  const autoPassiveInvestigation = investigationSkill
+    ? 10 + investigationSkill.modifier
+    : 10 + intMod
+
+  // Update inputs only if user hasn't manually set a different value
+  // (if current value matches the old auto-calculated value, update it)
+  const passiveInput = document.querySelector('input[onchange*="passive="]')
+  if (passiveInput && (passiveInput.value === '' || passiveInput.value === passiveInput.placeholder)) {
+    passiveInput.value = autoPassivePerception
+    passiveInput.placeholder = autoPassivePerception
+    if (d.passive === '' || d.passive == null) d.passive = ''
+  } else if (passiveInput) {
+    passiveInput.placeholder = autoPassivePerception
+  }
+
+  const insightInput = document.querySelector('input[onchange*="passiveInsight="]')
+  if (insightInput && (insightInput.value === '' || insightInput.value === insightInput.placeholder)) {
+    insightInput.value = autoPassiveInsight
+    insightInput.placeholder = autoPassiveInsight
+    if (d.passiveInsight == null) d.passiveInsight = null
+  } else if (insightInput) {
+    insightInput.placeholder = autoPassiveInsight
+  }
+
+  const investigationInput = document.querySelector('input[onchange*="passiveInvestigation="]')
+  if (investigationInput && (insightInput.value === '' || investigationInput.value === investigationInput.placeholder)) {
+    investigationInput.value = autoPassiveInvestigation
+    investigationInput.placeholder = autoPassiveInvestigation
+    if (d.passiveInvestigation == null) d.passiveInvestigation = null
+  } else if (investigationInput) {
+    investigationInput.placeholder = autoPassiveInvestigation
+  }
+}
+
+function pcbRenderSenses() {
+  const MBS = window.MBS
+  const mbEsc = window.mbEsc
+  const d = pcb.draft
+
+  // Calculate default passive values
+  const wis = parseInt(d.wis) || 10
+  const int = parseInt(d.int) || 10
+  const wisMod = Math.floor((wis - 10) / 2)
+  const intMod = Math.floor((int - 10) / 2)
+  const profBonus = d.proficiencyBonus || 2
+
+  // Check skill proficiency (skills array has objects with {name, modifier})
+  const skills = d.skills || []
+  const perceptionSkill = skills.find(sk => sk.name === 'Perception')
+  const insightSkill = skills.find(sk => sk.name === 'Insight')
+  const investigationSkill = skills.find(sk => sk.name === 'Investigation')
+
+  // Auto-calculate passive values
+  const defaultPassivePerception = 10 + wisMod + (perceptionSkill ? profBonus : 0)
+  const defaultPassiveInsight = 10 + wisMod + (insightSkill ? profBonus : 0)
+  const defaultPassiveInvestigation = 10 + intMod + (investigationSkill ? profBonus : 0)
+
+  return `
+    <div>
+      <div style="margin-bottom:12px;">
+        <label style="${MBS.label}">SENSES</label>
+        <input value="${mbEsc(d.senses)}" placeholder="Darkvision 30 ft., Tremorsense 60 ft., etc."
+          onchange="pcb.draft.senses=this.value;mb.draft.senses=this.value;pcb.dirty=true;mb.dirty=true"
+          style="${MBS.field}width:100%;">
+      </div>
+      <div style="display:flex;gap:12px;">
+        <div style="flex:1;">
+          <label style="${MBS.label}">PASSIVE PERCEPTION</label>
+          <input type="number" value="${d.passive !== '' && d.passive != null ? d.passive : defaultPassivePerception}"
+            placeholder="${defaultPassivePerception}"
+            onchange="pcb.draft.passive=this.value;mb.draft.passive=this.value;pcb.dirty=true;mb.dirty=true"
+            style="${MBS.field}width:70px;">
+        </div>
+        <div style="flex:1;">
+          <label style="${MBS.label}">PASSIVE INSIGHT</label>
+          <input type="number" value="${d.passiveInsight != null ? d.passiveInsight : defaultPassiveInsight}"
+            placeholder="${defaultPassiveInsight}"
+            onchange="pcb.draft.passiveInsight=parseInt(this.value)||null;mb.draft.passiveInsight=parseInt(this.value)||null;pcb.dirty=true;mb.dirty=true"
+            style="${MBS.field}width:70px;">
+        </div>
+        <div style="flex:1;">
+          <label style="${MBS.label}">PASSIVE INVESTIGATION</label>
+          <input type="number" value="${d.passiveInvestigation != null ? d.passiveInvestigation : defaultPassiveInvestigation}"
+            placeholder="${defaultPassiveInvestigation}"
+            onchange="pcb.draft.passiveInvestigation=parseInt(this.value)||null;mb.draft.passiveInvestigation=parseInt(this.value)||null;pcb.dirty=true;mb.dirty=true"
+            style="${MBS.field}width:70px;">
+        </div>
+      </div>
+    </div>
+  `
 }
 
 function renderPCBuilder() {
@@ -442,12 +560,12 @@ function pcbRenderForm() {
       ${window.mbCardWrap('SKILLS', `<div id="mb-sect-Skills">${window.mbRenderSkills()}</div>`)}
       ${window.mbCardWrap('DAMAGE VULNERABILITIES / RESISTANCES / IMMUNITIES', window.mbRenderDamageTypes())}
       ${window.mbCardWrap('CONDITION IMMUNITIES', window.mbRenderConditionImmunities())}
-      ${window.mbCardWrap('SENSES', window.mbRenderSenses())}
+      ${window.mbCardWrap('SENSES & PASSIVE SENSES', pcbRenderSenses())}
       ${window.mbCardWrap('LANGUAGES', window.mbRenderLanguages())}
       ${window.mbCardWrap('TRAITS', `<div id="mb-sect-traits">${window.mbRenderAbilityGroup('traits', false)}</div>`)}
       ${window.mbCardWrap('ACTIONS', `<div id="mb-sect-actions">${window.mbRenderAbilityGroup('actions', true)}</div>`)}
-      ${window.mbCardWrap('BONUS ACTIONS', `<div id="mb-sect-bonusActions">${window.mbRenderAbilityGroup('bonusActions', false)}</div>`)}
-      ${window.mbCardWrap('REACTIONS', `<div id="mb-sect-reactions">${window.mbRenderAbilityGroup('reactions', false)}</div>`)}
+      ${window.mbCardWrap('BONUS ACTIONS', `<div id="mb-sect-bonusActions">${window.mbRenderAbilityGroup('bonusActions', true)}</div>`)}
+      ${window.mbCardWrap('REACTIONS', `<div id="mb-sect-reactions">${window.mbRenderAbilityGroup('reactions', true)}</div>`)}
       ${window.mbCardWrap('SPELLS', `<div id="mb-sect-Spells">${pcbRenderSpells()}</div>`)}
       ${pcbRenderNotes()}
       ${window.mbCardWrap('DESCRIPTION', pcbRenderDescription())}
@@ -558,11 +676,11 @@ function pcbRenderHeader() {
           </div>
           <div>
             <div style="display:flex;align-items:center;gap:5px;margin-bottom:5px;">
-              <span style="font-size:10px;color:#8b0000;letter-spacing:.1em;font-weight:700;">ALIGNMENT</span>
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none;">
-                <input type="checkbox" ${d.alignmentTypically?' checked':''}
-                  onchange="mb.draft.alignmentTypically=this.checked;pcb.draft.alignmentTypically=this.checked;mb.dirty=true;pcb.dirty=true"
-                  style="accent-color:#8b0000;width:12px;height:12px;cursor:pointer;flex-shrink:0;">
+              <span style="font-size:10px;color:#7B9BA8;letter-spacing:.1em;font-weight:700;">ALIGNMENT</span>
+              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none;"
+                onclick="mb.draft.alignmentTypically=!mb.draft.alignmentTypically;pcb.draft.alignmentTypically=mb.draft.alignmentTypically;mb.dirty=true;pcb.dirty=true;renderPCBuilder()">
+                <div style="width:12px;height:12px;border-radius:50%;border:2px solid ${d.alignmentTypically?'#8b0000':'#666'};
+                            background:${d.alignmentTypically?'#8b0000':'transparent'};flex-shrink:0;transition:all 0.2s;"></div>
                 <span style="font-size:10px;color:#C8C8C8;font-style:italic;">Typically</span>
               </label>
             </div>
@@ -595,7 +713,24 @@ function pcbRenderCombat() {
   const conMod = Math.floor(((parseInt(d.con)||10) - 10) / 2)
   const avgPerDie = parseInt(d.hitDiceSize?.replace('d','') || 8) / 2 + 0.5
   const avgHp = Math.floor(d.hitDiceCount * avgPerDie + d.hitDiceCount * conMod)
-  const hpDisplay = `HP Total: ${avgHp} (${d.hitDiceCount}${d.hitDiceSize}${conMod >= 0 ? ' + ' : ' - '}${Math.abs(d.hitDiceCount * conMod)})`
+  const totalCon = d.hitDiceCount * conMod
+
+  // Calculate min/max
+  const minHp = Math.max(1, (d.hitDiceCount * 1) + totalCon)
+  const maxHp = Math.max(1, (d.hitDiceCount * parseInt(d.hitDiceSize.replace('d', ''))) + totalCon)
+
+  // Build calculated HP string
+  let diceStr = `${d.hitDiceCount}${d.hitDiceSize}`
+  if (totalCon > 0) diceStr += ` +${totalCon}`
+  else if (totalCon < 0) diceStr += ` ${totalCon}`
+
+  const hpInfo = {
+    auto: avgHp,
+    calculated: `Calculated HP (${diceStr})`,
+    min: minHp,
+    avg: avgHp,
+    max: maxHp
+  }
 
   const acValItems  = Array.from({length:99},(_,i)=>i+1)
   const hdCntItems  = Array.from({length:99},(_,i)=>i+1)
@@ -623,7 +758,6 @@ function pcbRenderCombat() {
           style="${MBS.field}width:100%;box-sizing:border-box;">
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;min-height:148px;">
-        <label style="${MBS.label}text-align:center;">HIT POINTS</label>
         <div style="display:flex;gap:6px;align-items:flex-start;">
           <div>
             <div style="${sl}">DICE COUNT</div>
@@ -637,11 +771,19 @@ function pcbRenderCombat() {
               v => { mb.draft.hitDiceSize = v; mb.dirty = true; mbUpdateHpAvg(); },
               '62px')}
           </div>
-          <div style="display:flex;flex-direction:column;gap:4px;padding-top:14px;width:140px;">
-            <span id="mb-hp-display" style="font-size:11px;color:#C8C8C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:140px;height:14px;display:block;">${hpDisplay}</span>
-            <input type="number" id="mb-hp-val" value="${d.hpValue||0}" min="0"
-              onchange="mb.draft.hpValue=parseInt(this.value)||0;mb.dirty=true"
-              style="${MBS.field}width:64px;text-align:center;">
+          <div style="display:flex;flex-direction:column;gap:6px;padding-top:0px;width:160px;">
+            <div>
+              <label style="${MBS.label}">MAX HP</label>
+              <input type="number" id="mb-hp-val" value="${d.hpValue||0}" min="0"
+                onchange="mb.draft.hpValue=parseInt(this.value)||0;mb.dirty=true"
+                style="${MBS.field}width:80px;text-align:center;">
+            </div>
+            <div style="font-size:11px;color:#7B9BA8;line-height:1.4;">
+              <div id="mb-hp-calculated" style="margin-bottom:4px;">${hpInfo.calculated}</div>
+              <div id="mb-hp-min">Minimum: ${hpInfo.min}</div>
+              <div id="mb-hp-avg">Average: ${hpInfo.avg}</div>
+              <div id="mb-hp-max">Maximum: ${hpInfo.max}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -665,7 +807,6 @@ function pcbRenderSpells() {
   const mbDrumPicker = window.mbDrumPicker
   const mbEsc = window.mbEsc
   const d = mb?.draft || {}
-  console.log('[pcbRenderSpells] mb.draft.selectedSpells:', d.selectedSpells?.length, d.selectedSpells?.[0])
   const selectedSpells = Array.isArray(d.selectedSpells) ? d.selectedSpells : []
   const spellSlots = Array.isArray(d.spellSlots) ? d.spellSlots : [0,0,0,0,0,0,0,0,0]
   const atwill = selectedSpells.map((s,i)=>({...s,_i:i})).filter(s=>s && s.usage==='atwill')
@@ -692,7 +833,7 @@ function pcbRenderSpells() {
           <select id="pcb-spellcasting-type"
             onchange="mb.draft.spellcastingType=this.value;mb.dirty=true;pcb.dirty=true;window.pcbUpdateSpellSlots()"
             style="${MBS.field}width:100%;padding:8px 12px;
-                   background:#262F35;border:1px solid #8b0000;color:#e0d5c5;
+                   background:#262F35;border:1px solid #7B9BA8;color:#e0d5c5;
                    font-family:var(--app-font);font-size:14px;border-radius:4px;
                    cursor:pointer;">
             ${spellcastingTypes.map(type =>
@@ -719,13 +860,13 @@ function pcbRenderSpells() {
         </div>
       </div>
 
-      <div style="font-size:11px;color:#8b0000;font-weight:700;letter-spacing:.08em;
+      <div style="font-size:11px;color:#7B9BA8;font-weight:700;letter-spacing:.08em;
                   margin-bottom:6px;margin-top:2px;">AT WILL</div>
       ${atwill.length === 0
         ? `<div style="font-size:12px;color:#C8C8C8;font-style:italic;margin-bottom:8px;">None</div>`
         : atwill.map(sp => spellRow(sp)).join('') }
 
-      <div style="font-size:11px;color:#8b0000;font-weight:700;letter-spacing:.08em;
+      <div style="font-size:11px;color:#7B9BA8;font-weight:700;letter-spacing:.08em;
                   margin-bottom:6px;margin-top:10px;">DAILY</div>
       ${daily.length === 0
         ? `<div style="font-size:12px;color:#C8C8C8;font-style:italic;margin-bottom:8px;">None</div>`
@@ -820,14 +961,48 @@ function pcbAddNote() {
   pcb.draft.notes.push({title: '', body: ''})
   pcb.dirty = true
   mb.dirty = true
-  window.mbRefreshSection('notes')
+  const list = document.getElementById('pcb-notes-list')
+  if (list) {
+    list.innerHTML = (pcb.draft.notes || []).map((note, i) => `
+      <div style="margin-bottom:10px;padding:10px;background:#0a1520;border-radius:4px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+          <input value="${window.mbEsc(note.title)}" placeholder="Note title"
+            onchange="pcb.draft.notes[${i}].title=this.value;mb.dirty=true;pcb.dirty=true"
+            style="${window.MBS.field}flex:1;">
+          <button onclick="pcbRemoveNote(${i})"
+            style="background:none;border:none;color:#8b0000;cursor:pointer;font-size:18px;padding:0 4px;">×</button>
+        </div>
+        <textarea placeholder="Note text"
+          onchange="pcb.draft.notes[${i}].body=this.value;mb.dirty=true;pcb.dirty=true"
+          style="${window.MBS.field}width:100%;min-height:60px;resize:vertical;font-family:var(--app-font);">${window.mbEsc(note.body)}</textarea>
+      </div>
+    `).join('')
+  }
 }
 
 function pcbRemoveNote(index) {
-  pcb.draft.notes.splice(index, 1)
-  pcb.dirty = true
-  mb.dirty = true
-  window.mbRefreshSection('notes')
+  window.confirmDelete('Delete note?', () => {
+    pcb.draft.notes.splice(index, 1)
+    pcb.dirty = true
+    mb.dirty = true
+    const list = document.getElementById('pcb-notes-list')
+    if (list) {
+      list.innerHTML = (pcb.draft.notes || []).map((note, i) => `
+        <div style="margin-bottom:10px;padding:10px;background:#0a1520;border-radius:4px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
+            <input value="${window.mbEsc(note.title)}" placeholder="Note title"
+              onchange="pcb.draft.notes[${i}].title=this.value;mb.dirty=true;pcb.dirty=true"
+              style="${window.MBS.field}flex:1;">
+            <button onclick="pcbRemoveNote(${i})"
+              style="background:none;border:none;color:#8b0000;cursor:pointer;font-size:18px;padding:0 4px;">×</button>
+          </div>
+          <textarea placeholder="Note text"
+            onchange="pcb.draft.notes[${i}].body=this.value;mb.dirty=true;pcb.dirty=true"
+            style="${window.MBS.field}width:100%;min-height:60px;resize:vertical;font-family:var(--app-font);">${window.mbEsc(note.body)}</textarea>
+        </div>
+      `).join('')
+    }
+  })
 }
 
 function pcbSave() {
@@ -837,10 +1012,74 @@ function pcbSave() {
     return
   }
 
+  // Normalize traits to use charges/chargesCurrent/recharge instead of limitedUsage
+  const normalizedTraits = (d.traits || []).map(t => {
+    if (t.limitedUsage) {
+      const lu = t.limitedUsage
+      // Map limitedUsage type to recharge format
+      let recharge = null
+      if (lu.type === 'recharge_5_6') recharge = 5
+      else if (lu.type === 'recharge_6') recharge = 6
+      else if (lu.type.startsWith('recharge_')) {
+        const match = lu.type.match(/recharge_(\d+)/)
+        if (match) recharge = parseInt(match[1])
+      }
+
+      const charges = lu.type === 'per_day' || lu.type === 'charges' ? (lu.count || null) : null
+
+      return {
+        ...t,
+        charges: charges,
+        chargesCurrent: charges, // Full at save time
+        recharge: recharge,
+        limitedUsage: lu // Keep for builder editing
+      }
+    }
+    return {...t, charges: t.charges ?? null, chargesCurrent: t.chargesCurrent ?? null, recharge: t.recharge ?? null}
+  })
+
+  // Normalize actions similarly
+  const normalizedActions = (d.actions || []).map(a => {
+    if (a.limitedUsage) {
+      const lu = a.limitedUsage
+      let recharge = null
+      if (lu.type === 'recharge_5_6') recharge = 5
+      else if (lu.type === 'recharge_6') recharge = 6
+      else if (lu.type.startsWith('recharge_')) {
+        const match = lu.type.match(/recharge_(\d+)/)
+        if (match) recharge = parseInt(match[1])
+      }
+
+      const charges = lu.type === 'per_day' || lu.type === 'charges' ? (lu.count || null) : null
+
+      return {
+        ...a,
+        charges: charges,
+        chargesCurrent: charges,
+        recharge: recharge,
+        limitedUsage: lu
+      }
+    }
+    return {...a, charges: a.charges ?? null, chargesCurrent: a.chargesCurrent ?? null, recharge: a.recharge ?? null}
+  })
+
   const pc = {
     uid: pcb.originalUid || 'pc_' + Date.now() + '_' + Math.random().toString(36).slice(2),
     _draft: JSON.parse(JSON.stringify(d)),
     ...d, // Spread all fields for backward compatibility
+    // Add normalized fields for encounter system compatibility
+    hpMax: d.hpValue || 1,
+    hpCurrent: d.hpValue || 1, // Default to full HP
+    abilities: [
+      String(d.str || 10),
+      String(d.dex || 10),
+      String(d.con || 10),
+      String(d.int || 10),
+      String(d.wis || 10),
+      String(d.cha || 10)
+    ],
+    traits: normalizedTraits,
+    actions: normalizedActions,
   }
 
   if (!compendiumData.players) compendiumData.players = []
@@ -917,3 +1156,4 @@ window.pcbBack = pcbBack
 window.pcbUpdateProficiency = pcbUpdateProficiency
 window.pcbUpdateSpellSlots = pcbUpdateSpellSlots
 window.pcbUpdateInitiative = pcbUpdateInitiative
+window.pcbUpdatePassiveSenses = pcbUpdatePassiveSenses

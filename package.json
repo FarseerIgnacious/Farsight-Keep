@@ -1,7 +1,7 @@
 {
-  "name": "dm-companion",
+  "name": "farsight-keep",
   "version": "1.0.0",
-  "description": "",
+  "description": "A fully offline desktop companion app for D&D 5e Dungeon Masters — manage encounters, monsters, NPCs, PCs, spells, and campaigns without needing an internet connection.",
   "main": "main.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -13,6 +13,39 @@
   "type": "commonjs",
   "devDependencies": {
     "electron": "^30.5.1",
-    "http-server": "^14.1.1"
+    "electron-builder": "^26.15.3",
+    "http-server": "^14.1.1",
+    "playwright": "^1.61.0"
+  },
+  "build": {
+    "appId": "com.dmscompanion.app",
+    "productName": "Farsight Keep",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "**/*",
+      "!**/*.md",
+      "!.nvmrc",
+      "!.git",
+      "!.gitignore"
+    ],
+    "mac": {
+      "category": "public.app-category.utilities",
+      "target": [
+        { "target": "dmg", "arch": ["universal"] },
+        { "target": "zip", "arch": ["universal"] }
+      ]
+    },
+    "win": {
+      "target": "nsis"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Game"
+    }
   }
 }

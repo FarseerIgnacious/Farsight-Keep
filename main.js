@@ -2,6 +2,8 @@ const { app, BrowserWindow, ipcMain, dialog } = require('electron')
 const path = require('path')
 const fs   = require('fs')
 
+app.setName('Farsight Keep')
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -12,6 +14,10 @@ function createWindow() {
     }
   })
   win.loadFile('index.html')
+
+  win.webContents.on('did-finish-load', () => {
+    win.webContents.setZoomFactor(1)
+  })
 }
 
 // ── File dialog for opening XML or images ────────────────────────
@@ -38,6 +44,11 @@ ipcMain.handle('read-file-base64', async (event, filePath) => {
 ipcMain.handle('read-file-text', async (event, filePath) => {
   try { return fs.readFileSync(filePath, 'utf8') }
   catch(e) { return null }
+})
+
+// ── Expose Electron's standard userData path to the renderer ────
+ipcMain.on('get-user-data-path', (event) => {
+  event.returnValue = app.getPath('userData')
 })
 
 app.whenReady().then(() => {

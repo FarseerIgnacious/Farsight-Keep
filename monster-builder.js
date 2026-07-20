@@ -126,10 +126,23 @@ function mbHpDisplay(d) {
   const conMod = mbMod(d.con)
   const autoHp = Math.max(1, Math.floor(d.hitDiceCount * avg + d.hitDiceCount * conMod))
   const totalCon = d.hitDiceCount * conMod
+
+  // Calculate min/max
+  const minHp = Math.max(1, (d.hitDiceCount * 1) + totalCon)
+  const maxHp = Math.max(1, (d.hitDiceCount * parseInt(d.hitDiceSize.replace('d', ''))) + totalCon)
+
+  // Build calculated HP string
   let diceStr = `${d.hitDiceCount}${d.hitDiceSize}`
-  if (totalCon > 0) diceStr += ` + ${totalCon}`
-  else if (totalCon < 0) diceStr += ` - ${Math.abs(totalCon)}`
-  return { auto: autoHp, display: `HP Total: ${autoHp} (${diceStr})` }
+  if (totalCon > 0) diceStr += ` +${totalCon}`
+  else if (totalCon < 0) diceStr += ` ${totalCon}`
+
+  return {
+    auto: autoHp,
+    calculated: `Calculated HP (${diceStr})`,
+    min: minHp,
+    avg: autoHp,
+    max: maxHp
+  }
 }
 function mbSignedNum(n) { return n >= 0 ? `+${n}` : `${n}` }
 function mbAvgHp(d) {
@@ -161,6 +174,22 @@ function mbRechargeNum(lu) {
   if (!lu) return null
   if (lu.type.startsWith('recharge_')) return parseInt(lu.type.split('_')[1]) || null
   return null
+}
+
+// Calculate proficiency bonus from CR using standard 5e table
+function mbProficiencyFromCR(cr) {
+  // Handle fractional CRs
+  const crNum = cr === '1/8' ? 0.125 : cr === '1/4' ? 0.25 : cr === '1/2' ? 0.5 : parseFloat(cr)
+  if (isNaN(crNum)) return 2
+
+  if (crNum <= 4) return 2
+  if (crNum <= 8) return 3
+  if (crNum <= 12) return 4
+  if (crNum <= 16) return 5
+  if (crNum <= 20) return 6
+  if (crNum <= 24) return 7
+  if (crNum <= 28) return 8
+  return 9
 }
 
 // ── Draft model ───────────────────────────────────────────────────
@@ -202,8 +231,9 @@ function mbFromCompendium(m) {
   const sz = (m.size||'').trim()
   d.size = MB_SIZES.includes(sz) ? sz : (szMap[sz] || 'Medium')
 
-  const rawType = (m.type||'').replace(/\s*\(.*\)/,'').trim()
-  d.type = MB_TYPES.find(t => t.toLowerCase()===rawType.toLowerCase()) || 'Humanoid'
+  // Read type directly (no longer using drum picker, so accept any value)
+  d.type = m.type || 'Humanoid'
+  d.tag = m.tag || ''  // FIX 3: Read tag field from monster data
   const rawAlign = (m.alignment||'').trim()
   if (rawAlign.toLowerCase().startsWith('typically ')) {
     d.alignmentTypically = true
@@ -233,8 +263,16 @@ function mbFromCompendium(m) {
   d.speed = mbSpeedStr(d.speedEntries)
   d.str = parseInt(m.str)||10; d.dex = parseInt(m.dex)||10; d.con = parseInt(m.con)||10
   d.int = parseInt(m.int)||10; d.wis = parseInt(m.wis)||10; d.cha = parseInt(m.cha)||10
+  d.initiativeBonus = mbMod(d.dex)
 
-  const ab = {str:'STR',dex:'DEX',con:'CON',int:'INT',wis:'WIS',cha:'CHA'}
+  const ab = {
+    str:'STR', strength:'STR',
+    dex:'DEX', dexterity:'DEX',
+    con:'CON', constitution:'CON',
+    int:'INT', intelligence:'INT',
+    wis:'WIS', wisdom:'WIS',
+    cha:'CHA', charisma:'CHA'
+  }
   ;(m.save||'').split(',').forEach(s => {
     const sm = s.trim().match(/^([A-Za-z]+)\s*([+-]\d+)/)
     if (sm) { const a = ab[sm[1].toLowerCase()]; if (a) d.savingThrows.push({ability:a, modifier:parseInt(sm[2])}) }
@@ -264,23 +302,193 @@ function mbFromCompendium(m) {
   const rawCr = (m.cr||'0').toString().trim()
   const crEntry = MB_CR_TABLE.find(e => e.cr === rawCr)
   d.cr = crEntry ? rawCr : '0'
+  d.proficiencyBonus = mbProficiencyFromCR(d.cr)
 
   function parseEntries(arr, hasAttack) {
     return (arr||[]).map(t => {
       let lu = {type:'none', count:1}
       if (t.charges != null) lu = {type:'per_day', count:t.charges}
       else if (t.recharge != null) lu = {type:`recharge_${t.recharge}`, count:1}
-      const atk = (hasAttack && t.attack) ? {bonus:parseInt(t.attack.atk)||0, dmg:t.attack.dmg||''} : null
-      return { id:'mbe_'+Math.random().toString(36).slice(2), name:t.name||'', desc:t.text||'', limitedUsage:lu, attack:atk }
+
+      // Parse attack data - convert legacy XML format to structured format
+      // Handle both Monster Builder format (text/atk) and NPC Builder format (desc/bonus)
+      let atk = null
+      if (hasAttack && t.attack) {
+        // Normalize attack bonus - handle both formats
+        // NPC format: {bonus: 7} (number) → Monster format: {atk: "+7"} (string)
+        let normalizedAtkBonus = t.attack.atk || (t.attack.bonus !== undefined ?
+          (t.attack.bonus >= 0 ? `+${t.attack.bonus}` : String(t.attack.bonus)) : '+0')
+
+        // Check if it has old dmg-string format - if so, ALWAYS parse it to fix stale data
+        // The dmg field is the source of truth for legacy data
+        if (t.attack.dmg) {
+          // Legacy format with dmg string - parse it (overwrites any stale structured fields)
+          const dmgStr = t.attack.dmg || ''
+          const parsed = window.parseDamageString(dmgStr)
+
+          atk = {
+            atk: normalizedAtkBonus,
+            diceCount: parsed.diceCount,
+            dieType: parsed.dieType,
+            dmgBonus: parsed.dmgBonus,
+            dmgType: parsed.dmgType,
+            additionalDiceCount: parsed.additionalDiceCount || '',
+            additionalDieType: parsed.additionalDieType || '',
+            additionalDmgType: parsed.additionalDmgType || '',
+            showAdditional: (parsed.additionalDiceCount || '') !== '',
+            altDiceCount: t.attack.altDiceCount || '',
+            altDieType: t.attack.altDieType || '',
+            altDmgBonus: t.attack.altDmgBonus || '',
+            altDmgType: t.attack.altDmgType || '',
+            showAlternate: (t.attack.altDiceCount || '') !== ''
+          }
+        } else if (t.attack.atk !== undefined || t.attack.bonus !== undefined || t.attack.diceCount || t.attack.dieType) {
+          // Structured format - check for stale data pattern (bonus in dmgType field)
+          // Pattern: dmgType contains "+", "-", or starts with a number (old regex put bonus here)
+          const staleDmgType = String(t.attack.dmgType || '').trim()
+          const isStale = /^[\+\-\d]/.test(staleDmgType)
+
+          if (isStale && t.attack.diceCount && t.attack.dieType) {
+            // Reconstruct dmg string and re-parse to fix stale data
+            const reconstructed = `${t.attack.diceCount}${t.attack.dieType}${staleDmgType}`
+            const parsed = window.parseDamageString(reconstructed)
+
+            atk = {
+              atk: normalizedAtkBonus,
+              diceCount: parsed.diceCount,
+              dieType: parsed.dieType,
+              dmgBonus: parsed.dmgBonus,
+              dmgType: parsed.dmgType,
+              additionalDiceCount: parsed.additionalDiceCount || t.attack.additionalDiceCount || '',
+              additionalDieType: parsed.additionalDieType || t.attack.additionalDieType || '',
+              additionalDmgType: parsed.additionalDmgType || t.attack.additionalDmgType || '',
+              showAdditional: (parsed.additionalDiceCount || t.attack.additionalDiceCount || '') !== '',
+              altDiceCount: t.attack.altDiceCount || '',
+              altDieType: t.attack.altDieType || '',
+              altDmgBonus: t.attack.altDmgBonus || '',
+              altDmgType: t.attack.altDmgType || '',
+              showAlternate: (t.attack.altDiceCount || '') !== ''
+            }
+          } else {
+            // Clean structured format - use as-is
+            atk = {
+              atk: normalizedAtkBonus,
+              diceCount: t.attack.diceCount || '',
+              dieType: t.attack.dieType || 'd6',
+              dmgBonus: t.attack.dmgBonus || '',
+              dmgType: t.attack.dmgType || '',
+              additionalDiceCount: t.attack.additionalDiceCount || '',
+              additionalDieType: t.attack.additionalDieType || '',
+              additionalDmgType: t.attack.additionalDmgType || '',
+              showAdditional: t.attack.showAdditional || false,
+              altDiceCount: t.attack.altDiceCount || '',
+              altDieType: t.attack.altDieType || '',
+              altDmgBonus: t.attack.altDmgBonus || '',
+              altDmgType: t.attack.altDmgType || '',
+              showAlternate: t.attack.showAlternate || false
+            }
+          }
+        }
+
+        // Parse from description text - always run if desc is available
+        // Use t.desc (NPC format) or t.text (Monster format)
+        // Description text is the most reliable source for attack bonus and damage type
+        const descText = t.desc || t.text
+        const textParsed = window.parseAttackFromText && descText
+          ? window.parseAttackFromText(descText)
+          : null
+
+        if (atk && textParsed) {
+          // Always use text-parsed atk if available (description is most reliable)
+          if (textParsed.atk) {
+            atk.atk = textParsed.atk
+          }
+          // Only fill in missing damage fields from text (don't override parsed dmg)
+          if (!atk.diceCount && textParsed.diceCount) {
+            atk.diceCount = textParsed.diceCount
+          }
+          if (!atk.dieType && textParsed.dieType) {
+            atk.dieType = textParsed.dieType
+          }
+          if (!atk.dmgBonus && textParsed.dmgBonus) {
+            atk.dmgBonus = textParsed.dmgBonus
+          }
+          // Always use text-parsed dmgType (often missing from dmg string)
+          if (textParsed.dmgType) {
+            atk.dmgType = textParsed.dmgType
+          }
+          // Copy alternate damage fields if present
+          if (textParsed.altDiceCount) {
+            atk.altDiceCount = textParsed.altDiceCount
+            atk.altDieType = textParsed.altDieType
+            atk.altDmgBonus = textParsed.altDmgBonus
+            atk.altDmgType = textParsed.altDmgType
+            atk.showAlternate = true
+
+            // FIX: Prevent double-counting - if additional damage matches alternate damage, clear additional
+            // This happens when parseDamageString() extracts "or 3d4" as additional dice
+            if (atk.altDiceCount === atk.additionalDiceCount &&
+                atk.altDieType === atk.additionalDieType) {
+              atk.additionalDiceCount = ''
+              atk.additionalDieType = ''
+              atk.additionalDmgType = ''
+              atk.showAdditional = false
+            }
+          }
+        }
+      } else if (hasAttack && !t.attack) {
+        // No attack object at all - try to create one from description text
+        const descText = t.desc || t.text
+        if (descText && window.parseAttackFromText) {
+          const parsed = window.parseAttackFromText(descText)
+          if (parsed && (parsed.atk || parsed.diceCount)) {
+            atk = {
+              atk: parsed.atk || '+0',
+              diceCount: parsed.diceCount || '',
+              dieType: parsed.dieType || 'd6',
+              dmgBonus: parsed.dmgBonus || '',
+              dmgType: parsed.dmgType || '',
+              additionalDiceCount: parsed.additionalDiceCount || '',
+              additionalDieType: parsed.additionalDieType || '',
+              additionalDmgType: parsed.additionalDmgType || '',
+              showAdditional: (parsed.additionalDiceCount || '') !== '',
+              altDiceCount: parsed.altDiceCount || '',
+              altDieType: parsed.altDieType || '',
+              altDmgBonus: parsed.altDmgBonus || '',
+              altDmgType: parsed.altDmgType || '',
+              showAlternate: parsed.altDiceCount ? true : false
+            }
+
+            // FIX: Prevent double-counting - if additional damage matches alternate damage, clear additional
+            if (atk.altDiceCount === atk.additionalDiceCount &&
+                atk.altDieType === atk.additionalDieType &&
+                atk.altDiceCount !== '') {
+              atk.additionalDiceCount = ''
+              atk.additionalDieType = ''
+              atk.additionalDmgType = ''
+              atk.showAdditional = false
+            }
+          }
+        }
+      }
+
+      // Normalize output - use 'desc' field consistently (handles both t.text and t.desc input)
+      return {
+        id: t.id || 'mbe_'+Math.random().toString(36).slice(2),
+        name: t.name||'',
+        desc: t.desc || t.text || '',
+        limitedUsage: lu,
+        attack: atk
+      }
     })
   }
 
   d.traits = parseEntries(m.traits, false)
   d.actions = parseEntries(m.actions, true)
-  d.reactions = parseEntries(m.reactions, false)
+  d.reactions = parseEntries(m.reactions, true)
   d.legendaryActions = parseEntries(m.legendaryActions, true)
   d.lairActions = parseEntries(m.lairActions, true)
-  d.bonusActions = parseEntries(m.bonusActions, false)
+  d.bonusActions = parseEntries(m.bonusActions, true)
 
   if (m.slots) {
     m.slots.split(',').forEach((v,i) => { if (i<9) d.spellSlots[i] = parseInt(v)||0 })
@@ -458,9 +666,30 @@ function mbBuildCompendiumEntry(d) {
     }
   }
   function actionToBlob(e) {
+    const attackObj = e.attack ? {
+      atk: e.attack.atk || '+0',
+      diceCount: e.attack.diceCount || '',
+      dieType: e.attack.dieType || 'd6',
+      dmgBonus: e.attack.dmgBonus || '',
+      dmgType: e.attack.dmgType || '',
+      additionalDiceCount: e.attack.additionalDiceCount || '',
+      additionalDieType: e.attack.additionalDieType || '',
+      additionalDmgType: e.attack.additionalDmgType || '',
+      altDiceCount: e.attack.altDiceCount || '',
+      altDieType: e.attack.altDieType || '',
+      altDmgBonus: e.attack.altDmgBonus || '',
+      altDmgType: e.attack.altDmgType || ''
+      // showAdditional and showAlternate removed - UI state, not data
+    } : null
+
+    // Preserve dmg field if it exists (for backward compatibility and re-parsing)
+    if (attackObj && e.attack.dmg) {
+      attackObj.dmg = e.attack.dmg
+    }
+
     return {
       ...entryToBlob(e),
-      attack: e.attack ? { name:e.name, atk:mbSignedNum(e.attack.bonus), dmg:e.attack.dmg } : null,
+      attack: attackObj,
     }
   }
 
@@ -485,22 +714,22 @@ function mbBuildCompendiumEntry(d) {
     proficiencyBonus: d.proficiencyBonus||0,
     str: String(d.str), dex: String(d.dex), con: String(d.con),
     int: String(d.int), wis: String(d.wis), cha: String(d.cha),
-    save: d.savingThrows.map(s => `${s.ability[0]}${s.ability.slice(1).toLowerCase()} ${mbSignedNum(s.modifier)}`).join(', '),
-    skill: d.skills.map(s => `${s.name} ${mbSignedNum(s.modifier)}`).join(', '),
-    savingThrows: d.savingThrows, // Preserve array format for builder
-    skills: d.skills, // Preserve array format for builder
+    save: (d.savingThrows || []).map(s => `${s.ability[0]}${s.ability.slice(1).toLowerCase()} ${mbSignedNum(s.modifier)}`).join(', '),
+    skill: (d.skills || []).map(s => `${s.name} ${mbSignedNum(s.modifier)}`).join(', '),
+    savingThrows: d.savingThrows || [], // Preserve array format for builder
+    skills: d.skills || [], // Preserve array format for builder
     vulnerable: (d.vulnerable||[]).join(', '),
     resist: (d.resist||[]).join(', '),
     immune: (d.immune||[]).join(', '),
     conditionImmune: (d.conditionImmune||[]).join(', '),
     senses: d.senses,
     passive: d.passive||'', languages: d.languages, cr: d.cr,
-    traits: d.traits.map(entryToBlob),
-    actions: d.actions.map(actionToBlob),
-    reactions: d.reactions.map(entryToBlob),
-    legendaryActions: d.legendaryActions.map(actionToBlob),
-    lairActions: d.lairActions.map(actionToBlob),
-    bonusActions: d.bonusActions.map(entryToBlob),
+    traits: (d.traits || []).map(entryToBlob),
+    actions: (d.actions || []).map(actionToBlob),
+    reactions: (d.reactions || []).map(actionToBlob),
+    legendaryActions: (d.legendaryActions || []).map(actionToBlob),
+    lairActions: (d.lairActions || []).map(actionToBlob),
+    bonusActions: (d.bonusActions || []).map(actionToBlob),
     spellsAtWill: (d.selectedSpells||[]).filter(s=>s&&s.usage==='atwill').map(s=>s.name).join(','),
     spellsDaily:  (d.selectedSpells||[]).filter(s=>s&&s.usage==='daily')
                     .map(s=>`${s.name}:${s.dailyCount||1}`).join(','),
@@ -508,15 +737,13 @@ function mbBuildCompendiumEntry(d) {
     slots: (d.spellSlots||[0,0,0,0,0,0,0,0,0]).join(','),
     spellSaveDC: d.spellSaveDC,
     spellAttackMod: d.spellAttackMod,
-    environments: d.environments,
+    environments: d.environments || [],
     description: d.description,
   }
 }
 
 // ── Entry points ──────────────────────────────────────────────────
 function openMonsterBuilder(name) {
-  console.log('[openMonsterBuilder] called with name:', name)
-
   // Preserve encounter-only mode if it was set before calling
   const preserveEncounterMode = mb.encounterOnlyMode
 
@@ -532,7 +759,10 @@ function openMonsterBuilder(name) {
     if (!m) return
     mb.draft = mbFromCompendium(m)
     mb.originalName = m.name
+    mb.editingMonster = m  // Store reference to the exact monster being edited
     mb.step = 'form'
+    // Auto-fill proficiency bonus from CR
+    mb.draft.proficiencyBonus = mbProficiencyFromCR(mb.draft.cr || '1')
   } else {
     // Creating new - show choice screen
     mb.step = 'choice'
@@ -563,7 +793,6 @@ function openMonsterBuilder(name) {
 function renderMonsterBuilderChoice() {
   const content = document.getElementById('content')
   if (!content) return
-  content.style.padding = '20px'
   content.innerHTML = `
     <div style="max-width:700px;margin:0 auto;padding:40px 20px;">
       <div style="text-align:center;margin-bottom:32px;">
@@ -618,6 +847,9 @@ function mbStartScratch() {
   const dex = parseInt(mb.draft.dex) || 10
   mb.draft.initiativeBonus = Math.floor((dex - 10) / 2)
 
+  // Auto-fill proficiency bonus from CR
+  mb.draft.proficiencyBonus = mbProficiencyFromCR(mb.draft.cr || '1')
+
   renderMonsterBuilder()
 }
 
@@ -630,47 +862,77 @@ function mbShowMonsterPicker() {
 function renderMonsterPicker() {
   const content = document.getElementById('content')
   if (!content) return
-  content.style.padding = '20px'
+  content.style.padding = '24px 24px 24px 240px'
+  content.style.overflow = 'auto'
+
+  // Only render static UI (header, input) once
+  const existingContainer = document.getElementById('mb-monster-picker-container')
+  if (!existingContainer) {
+    content.innerHTML = `
+      <div id="mb-monster-picker-container">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+          <button onclick="mbCancelMonsterPicker()" style="${MBS.btnSecondary}padding:6px 14px;">
+            &#8592; Back
+          </button>
+          <h2 style="flex:1;font-size:20px;color:#e0d5c5;margin:0;">
+            Select Monster to Copy
+          </h2>
+        </div>
+
+        <input id="mb-monster-search" type="text" placeholder="Search monsters…"
+          value="${mb.monsterPickerQuery}"
+          oninput="mbFilterMonsterPicker(this.value)"
+          style="width:100%;max-width:500px;padding:8px 12px;margin-bottom:16px;background:#5C5C5C;
+                 border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
+                 border-radius:4px;font-size:14px;display:block;" />
+
+        <div id="mb-monster-results"></div>
+      </div>
+    `
+  }
+
+  // Always update the results (only re-renders the results list)
+  mbUpdateMonsterResults()
+}
+
+function mbUpdateMonsterResults() {
+  const resultsEl = document.getElementById('mb-monster-results')
+  if (!resultsEl) return
 
   const filtered = mb.monsterPickerQuery
     ? compendiumData.monsters.filter(m => m.name.toLowerCase().includes(mb.monsterPickerQuery.toLowerCase()))
     : compendiumData.monsters
 
-  content.innerHTML = `
-    <div style="max-width:800px;margin:0 auto;">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
-        <button onclick="mbCancelMonsterPicker()" style="${MBS.btnSecondary}padding:6px 14px;">
-          &#8592; Back
-        </button>
-        <h2 style="flex:1;font-size:20px;color:#e0d5c5;margin:0;">
-          Select Monster to Copy
-        </h2>
-      </div>
-
-      <input type="text" placeholder="Search monsters…" value="${mb.monsterPickerQuery}"
-        oninput="mbFilterMonsterPicker(this.value)"
-        style="width:100%;max-width:500px;padding:8px 12px;margin-bottom:16px;background:#5C5C5C;
-               border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-               border-radius:4px;font-size:14px;display:block;" />
-
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
-        ${filtered.length === 0
-          ? '<p style="color:#C8C8C8;grid-column:1/-1;">No monsters match that search.</p>'
-          : filtered.map(m => `
-            <div onclick="mbSelectMonster('${m.name.replace(/'/g, "\\'")}')"
-              style="background:#262F35;border:1px solid #2E2F2D;padding:12px;border-radius:4px;cursor:pointer;"
-              onmouseover="this.style.borderColor='#4a9a9a'"
-              onmouseout="this.style.borderColor='#2E2F2D'">
-              <div style="font-weight:bold;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                ${m.name}
-              </div>
-              <div style="font-size:12px;color:#C8C8C8;">${m.size} ${m.type}</div>
-              <div style="font-size:12px;color:#C8C8C8;">CR ${m.cr || '—'}</div>
+  resultsEl.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;overflow:hidden;">
+      ${filtered.length === 0
+        ? '<p style="color:#C8C8C8;grid-column:1/-1;">No monsters match that search.</p>'
+        : filtered.map((m, idx) => {
+          const displaySize = window.expandSize ? window.expandSize(m.size) : m.size
+          return `
+          <div onclick="mbSelectMonsterByIndex(${idx})"
+            style="background:#262F35;border:1px solid #2E2F2D;padding:12px;border-radius:4px;cursor:pointer;"
+            onmouseover="this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.borderColor='#2E2F2D'">
+            <div style="font-weight:bold;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#7B9BA8;">
+              ${m.name}
             </div>
-          `).join('')}
-      </div>
+            <div style="font-size:12px;color:#C8C8C8;">CR ${m.cr || '—'} · ${displaySize} ${m.type}</div>
+          </div>
+        `}).join('')}
     </div>
   `
+}
+
+function mbSelectMonsterByIndex(idx) {
+  const filtered = mb.monsterPickerQuery
+    ? compendiumData.monsters.filter(m => m.name.toLowerCase().includes(mb.monsterPickerQuery.toLowerCase()))
+    : compendiumData.monsters
+
+  const m = filtered[idx]
+  if (!m) return
+
+  mbSelectMonster(m.name)
 }
 
 function mbCancelMonsterPicker() {
@@ -680,7 +942,7 @@ function mbCancelMonsterPicker() {
 
 function mbFilterMonsterPicker(query) {
   mb.monsterPickerQuery = query
-  renderMonsterBuilder()
+  mbUpdateMonsterResults()
 }
 
 function mbSelectMonster(name) {
@@ -699,36 +961,38 @@ function mbSelectMonster(name) {
     mb.draft.initiativeBonus = Math.floor((dex - 10) / 2)
   }
 
+  // Auto-fill proficiency bonus from CR
+  mb.draft.proficiencyBonus = mbProficiencyFromCR(mb.draft.cr || '1')
+
   renderMonsterBuilder()
 }
 
 // ── Main render ───────────────────────────────────────────────────
 function renderMonsterBuilder() {
-  console.log('[renderMonsterBuilder] called, mb.step:', mb.step, 'mb.draft:', mb.draft)
   const content = document.getElementById('content')
   if (!content) return
-
-  if (mb.step === 'choice') {
-    renderMonsterBuilderChoice()
-    return
-  }
 
   if (mb.monsterPickerOpen) {
     renderMonsterPicker()
     return
   }
 
+  if (mb.step === 'choice') {
+    renderMonsterBuilderChoice()
+    return
+  }
+
   if (!mb.draft) {
-    console.log('[renderMonsterBuilder] exiting early - no draft')
     return
   }
   const d = mb.draft
   content.innerHTML = `
-    <div style="min-height:100%;background:linear-gradient(rgba(0,0,0,0.45), rgba(0,0,0,0.45)),
+    <div style="min-height:100%;background:linear-gradient(#5C5C5C 40px, transparent 40px),
+                linear-gradient(rgba(0,0,0,0.45), rgba(0,0,0,0.45)),
                 url('assets/Background.png') left -40px/1641px auto no-repeat fixed;">
       <div style="display:flex;align-items:center;gap:12px;
-           padding:46px 20px 12px 20px;background:#5C5C5C;border-bottom:4px solid #2E2F2D;
-           flex-shrink:0;padding-left:240px;box-sizing:border-box;margin-top:-30px;">
+           padding:16px 20px 12px 20px;background:#5C5C5C;border-bottom:4px solid #2E2F2D;
+           flex-shrink:0;padding-left:240px;box-sizing:border-box;">
         <button onclick="mbBack()" style="${MBS.btnSecondary}padding:6px 14px;">&#8592; Back</button>
         <div style="flex:1;text-align:center;">
           <span id="mb-title" style="font-size:15px;font-weight:bold;color:#e0d5c5;font-family:var(--app-font);">
@@ -742,21 +1006,36 @@ function renderMonsterBuilder() {
         <div style="${MBS.card}"><div id="mb-combat-section">${mbRenderCombat()}</div></div>
         ${mbCardWrap('SPEED', `<div id="mb-speed-section">${mbRenderSpeedPicker()}</div>`)}
         ${mbCardWrap('ABILITY SCORES', mbRenderAbilityScores())}
-        ${mbCardWrap('SAVING THROWS', `<div id="mb-sect-ST">${mbRenderSavingThrows()}</div>`)}
-        ${mbCardWrap('SKILLS', `<div id="mb-sect-Skills">${mbRenderSkills()}</div>`)}
+        ${mbCardWrap('SAVING THROWS', `<div id="mb-sect-ST" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'savingThrows')">${mbRenderSavingThrows()}</div>`)}
+        ${mbCardWrap('SKILLS', `<div id="mb-sect-Skills" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'skills')">${mbRenderSkills()}</div>`)}
         ${mbCardWrap('DAMAGE VULNERABILITIES / RESISTANCES / IMMUNITIES', mbRenderDamageTypes())}
         ${mbCardWrap('CONDITION IMMUNITIES', mbRenderCondImmune())}
         ${mbCardWrap('SENSES &amp; PASSIVE PERCEPTION', mbRenderSenses())}
         ${mbCardWrap('LANGUAGES', mbRenderLanguages())}
-        ${mbCardWrap('TRAITS', `<div id="mb-sect-traits">${mbRenderAbilityGroup('traits', false)}</div>`)}
-        ${mbCardWrap('ACTIONS', `<div id="mb-sect-actions">${mbRenderAbilityGroup('actions', true)}</div>`)}
-        ${mbCardWrap('BONUS ACTIONS', `<div id="mb-sect-bonusActions">${mbRenderAbilityGroup('bonusActions', false)}</div>`)}
-        ${mbCardWrap('REACTIONS', `<div id="mb-sect-reactions">${mbRenderAbilityGroup('reactions', false)}</div>`)}
-        ${mbCardWrap('LEGENDARY ACTIONS', `<div id="mb-sect-legendaryActions">${mbRenderAbilityGroup('legendaryActions', true)}</div>`)}
-        ${mbCardWrap('LAIR ACTIONS', `<div id="mb-sect-lairActions">${mbRenderAbilityGroup('lairActions', true)}</div>`)}
+        ${mbCardWrap('TRAITS', `<div id="mb-sect-traits" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'traits')">${mbRenderAbilityGroup('traits', false)}</div>`)}
+        ${mbCardWrap('ACTIONS', `<div id="mb-sect-actions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'actions')">${mbRenderAbilityGroup('actions', true)}</div>`)}
+        ${mbCardWrap('BONUS ACTIONS', `<div id="mb-sect-bonusActions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'bonusActions')">${mbRenderAbilityGroup('bonusActions', true)}</div>`)}
+        ${mbCardWrap('REACTIONS', `<div id="mb-sect-reactions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'reactions')">${mbRenderAbilityGroup('reactions', true)}</div>`)}
+        ${mbCardWrap('LEGENDARY ACTIONS', `<div id="mb-sect-legendaryActions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'legendaryActions')">${mbRenderAbilityGroup('legendaryActions', true)}</div>`)}
+        ${mbCardWrap('LAIR ACTIONS', `<div id="mb-sect-lairActions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'lairActions')">${mbRenderAbilityGroup('lairActions', true)}</div>`)}
         ${mbCardWrap('SPELLS', `<div id="mb-sect-Spells">${mbRenderSpells()}</div>`)}
         ${mbCardWrap('ENVIRONMENT', mbRenderEnvironments())}
         ${mbCardWrap('DESCRIPTION', mbRenderDescription())}
+
+        <!-- Delete Button (only when editing existing monster) -->
+        ${mb.originalName ? `
+          <div style="text-align:center;margin-top:40px;padding-top:20px;border-top:1px solid #2E2F2D;">
+            <button onclick="mbDelete()"
+              style="background:#3E1A1A;color:#E85D75;border:2px solid #5E2A2A;padding:10px 24px;
+                     border-radius:4px;cursor:pointer;font-family:var(--app-font);font-size:13px;
+                     font-weight:600;"
+              onmouseover="this.style.background='#5E2A2A';this.style.borderColor='#E85D75'"
+              onmouseout="this.style.background='#3E1A1A';this.style.borderColor='#5E2A2A'">
+              Delete Monster
+            </button>
+          </div>
+        ` : ''}
+
       </div>
     </div>
   `
@@ -964,11 +1243,11 @@ function mbRenderHeader() {
             onchange="mb.draft.name=this.value;mb.dirty=true;const t=document.getElementById('mb-title');if(t)t.textContent=this.value||'New Monster'"
             style="${MBS.field}width:100%;box-sizing:border-box;">
         </div>
-        <div style="display:grid;grid-template-columns:126px 117px 104px 140px;gap:8px;align-items:start;">
+        <div style="display:grid;grid-template-columns:126px 117px 244px;gap:8px;align-items:start;">
           <div>
             <label style="${MBS.label}">CR</label>
             ${mbDrumPicker('cr', crItems, crVal,
-              v => { mb.draft.cr = v; mb.dirty = true; }, '100%')}
+              v => { mb.draft.cr = v; mb.draft.proficiencyBonus = mbProficiencyFromCR(v); mb.dirty = true; mbUpdateProficiencyDisplay(); }, '100%')}
           </div>
           <div>
             <label style="${MBS.label}">SIZE</label>
@@ -976,23 +1255,21 @@ function mbRenderHeader() {
               v => { mb.draft.size = v; mb.dirty = true; }, '100%')}
           </div>
           <div>
-            <label style="${MBS.label}">TYPE</label>
-            ${mbDrumPicker('type', MB_TYPES, d.type,
-              v => { mb.draft.type = v; mb.dirty = true; }, '100%')}
-          </div>
-          <div>
             <div style="display:flex;align-items:center;gap:5px;margin-bottom:5px;">
               <span style="font-size:10px;color:#4587A2;letter-spacing:.1em;font-weight:700;">ALIGNMENT</span>
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;user-select:none;">
-                <input type="checkbox" ${d.alignmentTypically?' checked':''}
-                  onchange="mb.draft.alignmentTypically=this.checked;mb.dirty=true"
-                  style="accent-color:#4587A2;width:12px;height:12px;cursor:pointer;flex-shrink:0;">
-                <span style="font-size:10px;color:#C8C8C8;font-style:italic;">Typically</span>
-              </label>
+              <div style="transform:scale(0.6);transform-origin:left center;">
+                ${circleToggle('mb-alignment-typically', d.alignmentTypically, 'mbToggleAlignmentTypically()', 'Typically')}
+              </div>
             </div>
             ${mbDrumPicker('alignment', MB_ALIGNMENTS, d.alignment || 'Neutral',
               v => { mb.draft.alignment = v; mb.dirty = true; if(window.npcb) npcb.dirty=true; }, '100%')}
           </div>
+        </div>
+        <div>
+          <label style="${MBS.label}">TYPE</label>
+          <input value="${mbEsc(d.type||'')}" placeholder="Humanoid, Beast, Swarm of Tiny Beasts, etc."
+            onchange="mb.draft.type=this.value;mb.dirty=true"
+            style="${MBS.field}width:100%;box-sizing:border-box;">
         </div>
         <div>
           <label style="${MBS.label}">TAG</label>
@@ -1007,7 +1284,7 @@ function mbRenderHeader() {
 
 function mbRenderCombat() {
   const d = mb?.draft || {}
-  const {display: hpDisplay} = mbHpDisplay(d)
+  const hpInfo = mbHpDisplay(d)
   const sl = `font-size:10px;color:#C8C8C8;letter-spacing:.06em;margin-bottom:4px;`
   const acValItems  = Array.from({length:99},(_,i)=>i+1)
   const hdCntItems  = Array.from({length:99},(_,i)=>i+1)
@@ -1035,7 +1312,6 @@ function mbRenderCombat() {
           style="${MBS.field}width:100%;box-sizing:border-box;">
       </div>
       <div style="display:flex;flex-direction:column;align-items:center;min-height:148px;">
-        <label style="${MBS.label}text-align:center;">HIT POINTS</label>
         <div style="display:flex;gap:6px;align-items:flex-start;">
           <div>
             <div style="${sl}">DICE COUNT</div>
@@ -1049,11 +1325,19 @@ function mbRenderCombat() {
               v => { mb.draft.hitDiceSize = v; mb.dirty = true; mbUpdateHpAvg(); },
               '62px')}
           </div>
-          <div style="display:flex;flex-direction:column;gap:4px;padding-top:14px;width:140px;">
-            <span id="mb-hp-display" style="font-size:11px;color:#C8C8C8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;width:140px;height:14px;display:block;">${hpDisplay}</span>
-            <input type="number" id="mb-hp-val" value="${d.hpValue||0}" min="0"
-              onchange="mb.draft.hpValue=parseInt(this.value)||0;mb.dirty=true"
-              style="${MBS.field}width:64px;text-align:center;">
+          <div style="display:flex;flex-direction:column;gap:6px;padding-top:0px;width:160px;">
+            <div>
+              <label style="${MBS.label}">MAX HP</label>
+              <input type="number" id="mb-hp-val" value="${d.hpValue||0}" min="0"
+                onchange="mb.draft.hpValue=parseInt(this.value)||0;mb.dirty=true"
+                style="${MBS.field}width:80px;text-align:center;">
+            </div>
+            <div style="font-size:11px;color:#7B9BA8;line-height:1.4;">
+              <div id="mb-hp-calculated" style="margin-bottom:4px;">${hpInfo.calculated}</div>
+              <div id="mb-hp-min">Minimum: ${hpInfo.min}</div>
+              <div id="mb-hp-avg">Average: ${hpInfo.avg}</div>
+              <div id="mb-hp-max">Maximum: ${hpInfo.max}</div>
+            </div>
           </div>
         </div>
       </div>
@@ -1069,11 +1353,15 @@ function mbRenderCombat() {
         </div>
         <div>
           <label style="${MBS.label}">PROFICIENCY BONUS</label>
-          <div style="display:flex;align-items:center;gap:4px;">
-            <span style="font-size:13px;color:#C8C8C8;">${(d.proficiencyBonus||0) >= 0 ? '+' : ''}</span>
-            <input type="number" value="${d.proficiencyBonus||0}"
-              onchange="mb.draft.proficiencyBonus=parseInt(this.value)||0;mb.dirty=true"
-              style="${MBS.field}width:60px;text-align:center;">
+          <div id="mb-proficiency-display" style="display:flex;align-items:center;justify-content:center;
+                      background:#1A1C1E;border:1px solid #2E2F2D;border-radius:4px;
+                      padding:7px 10px;font-size:13px;color:#e0d5c5;font-weight:600;
+                      font-family:var(--app-font);width:60px;text-align:center;
+                      box-sizing:border-box;">
+            ${(d.proficiencyBonus||0) >= 0 ? '+' : ''}${d.proficiencyBonus||0}
+          </div>
+          <div style="font-size:9px;color:#7B9BA8;margin-top:3px;font-style:italic;text-align:center;">
+            Auto (from CR)
           </div>
         </div>
       </div>
@@ -1140,11 +1428,13 @@ function mbSpeedAdd() {
   if (el) el.innerHTML = mbRenderSpeedPicker()
 }
 function mbSpeedRemove(idx) {
-  mb.draft.speedEntries.splice(idx, 1)
-  mb.dirty = true
-  mb.draft.speed = mbSpeedStr(mb.draft.speedEntries)
-  const el = document.getElementById('mb-speed-section')
-  if (el) el.innerHTML = mbRenderSpeedPicker()
+  window.confirmDelete('Delete speed entry?', () => {
+    mb.draft.speedEntries.splice(idx, 1)
+    mb.dirty = true
+    mb.draft.speed = mbSpeedStr(mb.draft.speedEntries)
+    const el = document.getElementById('mb-speed-section')
+    if (el) el.innerHTML = mbRenderSpeedPicker()
+  })
 }
 
 function mbRenderAbilityScores() {
@@ -1162,6 +1452,7 @@ function mbRenderAbilityScores() {
               if(el)el.textContent=mbModStr(mb.draft['${k}']);
               if('${k}'==='con'){mbUpdateHpAvg();}
               if('${k}'==='dex'){mbUpdateInitiative();}
+              if('${k}'==='wis'||'${k}'==='int'){if(window.pcbUpdatePassiveSenses)pcbUpdatePassiveSenses();}
               "
             style="${MBS.field}width:100%;text-align:center;">
           <div id="mb-mod-${k}" style="font-size:12px;color:#C8C8C8;margin-top:4px;">${mbModStr(d[k])}</div>
@@ -1173,17 +1464,28 @@ function mbRenderAbilityScores() {
 
 function mbRenderSavingThrows() {
   const d = mb?.draft || {}
-  const savingThrows = Array.isArray(d.savingThrows) ? d.savingThrows : []
+  let savingThrows = Array.isArray(d.savingThrows) ? d.savingThrows : []
+
+  // Sort by standard D&D ability order: STR, DEX, CON, INT, WIS, CHA
+  const ABILITY_ORDER = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA']
+  savingThrows = [...savingThrows].sort((a, b) => {
+    const aName = typeof a.ability === 'number'
+      ? ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'][a.ability]
+      : String(a.ability).toUpperCase()
+    const bName = typeof b.ability === 'number'
+      ? ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'][b.ability]
+      : String(b.ability).toUpperCase()
+    return ABILITY_ORDER.indexOf(aName) - ABILITY_ORDER.indexOf(bName)
+  })
+
   return `
     ${savingThrows.length === 0
       ? `<div style="color:#C8C8C8;font-size:12px;margin-bottom:8px;font-style:italic;">No saving throws added.</div>`
       : savingThrows.map((st, i) => `
-          <div draggable="true"
-            ondragstart="mbDragStart('savingThrows',${i})"
-            ondragover="event.preventDefault()"
-            ondrop="mbDrop('savingThrows',${i})"
-            style="${MBS.itemRow}cursor:grab;">
-            <span style="color:#333;font-size:18px;user-select:none;line-height:1;">&#8801;</span>
+          <div data-drag-item="savingThrows" data-drag-idx="${i}"
+            style="${MBS.itemRow}position:relative;">
+            <span onmousedown="mbStartDrag(event,'savingThrows',${i})"
+              style="color:#333;font-size:18px;user-select:none;line-height:1;cursor:grab;padding:0 4px;margin-left:-4px;">&#8801;</span>
             <span style="color:#4587A2;font-weight:bold;width:36px;font-size:13px;">${st.ability}</span>
             <span style="color:#e0d5c5;font-size:13px;">${mbSignedNum(st.modifier)}</span>
             <button onclick="mbRemoveSavingThrow(${i})"
@@ -1193,7 +1495,8 @@ function mbRenderSavingThrows() {
         `).join('')
     }
     <div style="position:relative;display:inline-block;margin-top:6px;">
-      <button onclick="mbToggleStPicker()" style="${MBS.btnSecondarySmall}">+ Add</button>
+      <button onclick="mbToggleStPicker()"
+        style="${MBS.btnSecondarySmall}">+ Add</button>
       ${mb.stPickerOpen ? mbRenderStPickerHtml() : ''}
     </div>
   `
@@ -1207,7 +1510,7 @@ function mbRenderStPickerHtml() {
                 display:flex;gap:14px;box-shadow:0 6px 24px rgba(0,0,0,.6);">
       <div>
         <div style="font-size:10px;color:#C8C8C8;letter-spacing:.08em;margin-bottom:6px;">ABILITY</div>
-        <div style="max-height:168px;overflow-y:auto;">
+        <div id="mb-st-picker-list" style="max-height:168px;overflow-y:auto;">
           ${MB_ABILITIES_LIST.map(a => `
             <div onclick="mb.stPickerAbility='${a}';mbRefreshSection('savingThrows')"
               style="padding:5px 12px;cursor:pointer;border-radius:3px;font-size:13px;
@@ -1221,13 +1524,13 @@ function mbRenderStPickerHtml() {
       </div>
       <div>
         <div style="font-size:10px;color:#C8C8C8;letter-spacing:.08em;margin-bottom:6px;">MODIFIER</div>
-        <div style="max-height:168px;overflow-y:auto;">
-          ${Array.from({length:13},(_,i)=>i).map(n => `
+        <div id="mb-st-mod-list" style="max-height:168px;overflow-y:auto;">
+          ${Array.from({length:105},(_,i)=>i-5).map(n => `
             <div onclick="mb.stPickerMod=${n};mbRefreshSection('savingThrows')"
               style="padding:5px 12px;cursor:pointer;border-radius:3px;font-size:13px;
                      color:#e0d5c5;background:${mb.stPickerMod===n?'#1e3050':'transparent'};"
               onmouseover="this.style.background='#142840'" onmouseout="this.style.background='${mb.stPickerMod===n?'#1e3050':'transparent'}'">
-              +${n}
+              ${n>=0?'+'+n:n}
             </div>
           `).join('')}
         </div>
@@ -1245,27 +1548,30 @@ function mbRenderStPickerHtml() {
 
 function mbRenderSkills() {
   const d = mb?.draft || {}
-  const skills = Array.isArray(d.skills) ? d.skills : []
+  const skills = Array.isArray(d.skills) ? d.skills.slice().sort((a, b) => a.name.localeCompare(b.name)) : []
+  const originalSkills = Array.isArray(d.skills) ? d.skills : []
   return `
     ${skills.length === 0
       ? `<div style="color:#C8C8C8;font-size:12px;margin-bottom:8px;font-style:italic;">No skills added.</div>`
-      : skills.map((sk, i) => `
-          <div draggable="true"
-            ondragstart="mbDragStart('skills',${i})"
-            ondragover="event.preventDefault()"
-            ondrop="mbDrop('skills',${i})"
-            style="${MBS.itemRow}cursor:grab;">
-            <span style="color:#333;font-size:18px;user-select:none;line-height:1;">&#8801;</span>
+      : skills.map((sk) => {
+          const i = originalSkills.findIndex(s => s.name === sk.name && s.modifier === sk.modifier)
+          return `
+          <div data-drag-item="skills" data-drag-idx="${i}"
+            style="${MBS.itemRow}position:relative;">
+            <span onmousedown="mbStartDrag(event,'skills',${i})"
+              style="color:#333;font-size:18px;user-select:none;line-height:1;cursor:grab;padding:0 4px;margin-left:-4px;">&#8801;</span>
             <span style="color:#4587A2;font-weight:bold;flex:1;font-size:13px;">${mbEsc(sk.name)}</span>
             <span style="color:#e0d5c5;font-size:13px;">${mbSignedNum(sk.modifier)}</span>
             <button onclick="mbRemoveSkill(${i})"
               style="background:none;border:none;color:#4587A2;cursor:pointer;font-size:18px;
                      padding:0 4px;line-height:1;" title="Remove">&#8722;</button>
           </div>
-        `).join('')
+        `
+        }).join('')
     }
     <div style="position:relative;display:inline-block;margin-top:6px;">
-      <button onclick="mbToggleSkillPicker()" style="${MBS.btnSecondarySmall}">+ Add</button>
+      <button onclick="mbToggleSkillPicker()"
+        style="${MBS.btnSecondarySmall}">+ Add</button>
       ${mb.skillPickerOpen ? mbRenderSkillPickerHtml() : ''}
     </div>
   `
@@ -1279,7 +1585,7 @@ function mbRenderSkillPickerHtml() {
                 display:flex;gap:14px;box-shadow:0 6px 24px rgba(0,0,0,.6);">
       <div>
         <div style="font-size:10px;color:#C8C8C8;letter-spacing:.08em;margin-bottom:6px;">SKILL</div>
-        <div style="max-height:200px;overflow-y:auto;width:150px;">
+        <div id="mb-skill-picker-list" style="max-height:200px;overflow-y:auto;width:150px;">
           ${MB_SKILLS_LIST.map(sk => `
             <div onclick="mb.skillPickerName='${mbEsc(sk)}';mbRefreshSection('skills')"
               style="padding:5px 10px;cursor:pointer;border-radius:3px;font-size:12px;
@@ -1293,13 +1599,13 @@ function mbRenderSkillPickerHtml() {
       </div>
       <div>
         <div style="font-size:10px;color:#C8C8C8;letter-spacing:.08em;margin-bottom:6px;">MODIFIER</div>
-        <div style="max-height:200px;overflow-y:auto;">
-          ${Array.from({length:13},(_,i)=>i).map(n => `
+        <div id="mb-skill-mod-list" style="max-height:200px;overflow-y:auto;">
+          ${Array.from({length:105},(_,i)=>i-5).map(n => `
             <div onclick="mb.skillPickerMod=${n};mbRefreshSection('skills')"
               style="padding:5px 12px;cursor:pointer;border-radius:3px;font-size:13px;
                      color:#e0d5c5;background:${mb.skillPickerMod===n?'#1e3050':'transparent'};"
               onmouseover="this.style.background='#142840'" onmouseout="this.style.background='${mb.skillPickerMod===n?'#1e3050':'transparent'}'">
-              +${n}
+              ${n>=0?'+'+n:n}
             </div>
           `).join('')}
         </div>
@@ -1395,9 +1701,11 @@ function mbAddCustomTag(field) {
 
 function mbRemoveTag(field, idx) {
   if (!mb.draft[field]) return
-  mb.draft[field].splice(idx, 1); mb.dirty = true
-  const el = document.getElementById('mb-tagpicker-' + field)
-  if (el) el.innerHTML = mbRenderTagPickerInner(field, MB_TAG_OPTIONS[field])
+  window.confirmDelete('Delete?', () => {
+    mb.draft[field].splice(idx, 1); mb.dirty = true
+    const el = document.getElementById('mb-tagpicker-' + field)
+    if (el) el.innerHTML = mbRenderTagPickerInner(field, MB_TAG_OPTIONS[field])
+  })
 }
 
 function mbFilterTagOptions(field, query) {
@@ -1461,7 +1769,6 @@ function mbRenderLanguages() {
   const d = mb?.draft || {}
   return `
     <div>
-      <label style="${MBS.label}">LANGUAGES</label>
       <input value="${mbEsc(d.languages)}" placeholder="Common, Abyssal, Deep Speech, etc."
         onchange="mb.draft.languages=this.value;mb.dirty=true"
         style="${MBS.field}width:100%;">
@@ -1493,12 +1800,10 @@ function mbRenderAbilityGroup(section, withAttack) {
       : items.map((entry, i) => {
           if (i === editIdx) return mbRenderEntryEditor(entry, section, i, withAttack)
           return `
-            <div draggable="true"
-              ondragstart="mbDragStart('${section}',${i})"
-              ondragover="event.preventDefault()"
-              ondrop="mbDrop('${section}',${i})"
-              style="${MBS.itemRow}cursor:grab;">
-              <span style="color:#333;font-size:18px;user-select:none;line-height:1;">&#8801;</span>
+            <div data-drag-item="${section}" data-drag-idx="${i}"
+              style="${MBS.itemRow}position:relative;">
+              <span onmousedown="mbStartDrag(event,'${section}',${i})"
+                style="color:#333;font-size:18px;user-select:none;line-height:1;cursor:grab;padding:0 4px;margin-left:-4px;">&#8801;</span>
               <div style="flex:1;min-width:0;" onclick="mbEditEntry('${section}',${i})" style="cursor:pointer;">
                 <div style="font-size:13px;font-weight:bold;color:#e0d5c5;
                             white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
@@ -1506,7 +1811,7 @@ function mbRenderAbilityGroup(section, withAttack) {
                   <span style="color:#C8C8C8;font-size:11px;font-weight:normal;">
                     ${mbLimitedStr(entry.limitedUsage)}
                   </span>
-                  ${entry.attack ? `<span style="color:#8b4040;font-size:11px;font-weight:normal;"> [Attack]</span>` : ''}
+                  ${entry.attack ? `<span style="color:#8b4040;font-size:11px;font-weight:normal;"> [${entry.attack.atk === '—' ? 'Damage' : 'Attack'}]</span>` : ''}
                 </div>
                 ${entry.desc ? `<div style="font-size:11px;color:#C8C8C8;white-space:nowrap;overflow:hidden;
                                             text-overflow:ellipsis;max-width:400px;">${mbEsc(entry.desc)}</div>` : ''}
@@ -1575,28 +1880,227 @@ function mbRenderEntryEditor(entry, section, idx, withAttack) {
         </div>
         ${withAttack ? `
           <div>
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;color:#e0d5c5;">
-              <input type="checkbox" ${entry.attack?'checked':''} onchange="mbToggleAttack('${section}',${idx},this.checked)"
-                style="width:15px;height:15px;cursor:pointer;accent-color:#4587A2;">
-              Add Attack Roll
-            </label>
-            ${entry.attack ? `
-              <div style="display:grid;grid-template-columns:auto 1fr;gap:10px;margin-top:10px;align-items:end;">
-                <div>
-                  <label style="${MBS.label}">ATTACK BONUS</label>
-                  <input type="number" value="${entry.attack.bonus||0}"
-                    onchange="mbDraftEntryAtk('${section}',${idx},'bonus',parseInt(this.value)||0)"
-                    style="${MBS.field}width:70px;text-align:center;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div style="width:16px;height:16px;border-radius:50%;border:2px solid ${entry.attack?'#4587A2':'#666'};
+                          background:${entry.attack?'#4587A2':'transparent'};flex-shrink:0;transition:all 0.2s;cursor:pointer;"
+                onclick="mbToggleAttack('${section}',${idx},!${!!entry.attack})"></div>
+              <label style="font-size:13px;color:#e0d5c5;cursor:pointer;"
+                onclick="mbToggleAttack('${section}',${idx},!${!!entry.attack})">
+                Add Attack Roll/Damage
+              </label>
+            </div>
+            ${entry.attack ? (() => {
+              // Handle both Monster Builder format (atk) and NPC Builder format (bonus)
+              // NPC format: {bonus: 7} (number) → Monster format: {atk: "+7"} (string)
+              let atk = entry.attack.atk || (entry.attack.bonus !== undefined ?
+                (entry.attack.bonus >= 0 ? `+${entry.attack.bonus}` : String(entry.attack.bonus)) : '')
+
+              let diceCount = entry.attack.diceCount || ''
+              let dieType = entry.attack.dieType || 'd6'
+              let dmgBonus = entry.attack.dmgBonus || ''
+              let dmgType = entry.attack.dmgType || ''
+              let additionalDiceCount = entry.attack.additionalDiceCount || ''
+              let additionalDieType = entry.attack.additionalDieType || (additionalDiceCount ? 'd8' : 'd6')
+              let additionalDmgType = entry.attack.additionalDmgType || ''
+              let showAdditional = entry.attack.showAdditional !== undefined ? entry.attack.showAdditional : (additionalDiceCount !== '')
+
+              let altDiceCount = entry.attack.altDiceCount || ''
+              let altDieType = entry.attack.altDieType || (altDiceCount ? 'd8' : 'd6')
+              let altDmgBonus = entry.attack.altDmgBonus || ''
+              let altDmgType = entry.attack.altDmgType || ''
+              let showAlternate = entry.attack.showAlternate !== undefined ? entry.attack.showAlternate : (altDiceCount !== '')
+
+              // If this is legacy XML format (has 'dmg' field instead of structured), parse it
+              if (entry.attack.dmg && !entry.attack.diceCount) {
+                const parsed = window.parseDamageString(entry.attack.dmg)
+                diceCount = parsed.diceCount
+                dieType = parsed.dieType
+                dmgBonus = parsed.dmgBonus
+                dmgType = parsed.dmgType
+                additionalDiceCount = parsed.additionalDiceCount
+                additionalDieType = parsed.additionalDieType
+                additionalDmgType = parsed.additionalDmgType
+                showAdditional = additionalDiceCount !== ''
+              }
+
+              // Generate attack bonus options: -5 up to +99, with "—" between -1 and +0
+              const atkOptions = []
+              for (let i = -5; i <= -1; i++) atkOptions.push(`${i}`)
+              atkOptions.push('—')
+              for (let i = 0; i <= 99; i++) atkOptions.push(i === 0 ? '+0' : `+${i}`)
+
+              const isNoRoll = atk === '—'
+              const atkLabel = isNoRoll ? 'ATTACK BONUS (No attack roll)' : 'ATTACK BONUS'
+
+              return `
+              <div style="margin-top:10px;">
+                <div style="margin-bottom:10px;">
+                  <label style="${MBS.label}">${atkLabel}</label>
+                  <div id="mb-atk-picker-${section}-${idx}" style="max-height:56px;overflow-y:auto;width:42px;
+                                border:1px solid #4587A2;border-radius:3px;background:#1A1C1E;
+                                scrollbar-width:none;-ms-overflow-style:none;">
+                    <style>#mb-atk-picker-${section}-${idx}::-webkit-scrollbar { display: none; }</style>
+                    ${atkOptions.map(val => `
+                      <div onclick="mbDraftEntryAtk('${section}',${idx},'atk','${val}');mbRefreshSection('${section}')"
+                        data-selected="${atk === val}"
+                        style="padding:5px 12px;cursor:pointer;border-radius:3px;font-size:13px;
+                               color:#e0d5c5;background:${atk === val ? '#1e3050' : 'transparent'};
+                               display:flex;align-items:center;justify-content:center;"
+                        onmouseover="this.style.background='#142840'"
+                        onmouseout="this.style.background='${atk === val ? '#1e3050' : 'transparent'}'">
+                        ${val}
+                      </div>
+                    `).join('')}
+                  </div>
                 </div>
                 <div>
                   <label style="${MBS.label}">DAMAGE</label>
-                  <input value="${mbEsc(entry.attack.dmg||'')}"
-                    placeholder="2d6 + 4 slashing"
-                    onchange="mbDraftEntryAtk('${section}',${idx},'dmg',this.value)"
-                    style="${MBS.field}width:100%;">
+                  <div style="display:grid;grid-template-columns:90px 80px 110px 1fr;gap:6px;align-items:end;">
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Dice Amount</div>
+                      <input type="text" value="${mbEsc(diceCount)}"
+                        placeholder="2"
+                        onchange="mbDraftEntryAtk('${section}',${idx},'diceCount',this.value.trim())"
+                        style="${MBS.field}width:100%;text-align:center;">
+                    </div>
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Die</div>
+                      <select value="${dieType}"
+                        onchange="mbDraftEntryAtk('${section}',${idx},'dieType',this.value)"
+                        style="${MBS.field}width:100%;padding:8px 4px;">
+                        ${['d2','d4','d6','d8','d10','d12','d20'].map(d =>
+                          `<option value="${d}" ${dieType===d?'selected':''}>${d}</option>`
+                        ).join('')}
+                      </select>
+                    </div>
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Bonus</div>
+                      <div style="position:relative;display:inline-block;width:100%;">
+                        ${(() => {
+                          const val = String(dmgBonus).replace(/^[\+\-]/, '')
+                          const dmgNum = parseInt(val) || 0
+                          const showPrefix = dmgNum >= 0
+                          return `
+                            <span id="dmg-sign-${section}-${idx}" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);
+                                         color:#e0d5c5;font-size:13px;pointer-events:none;display:${showPrefix?'inline':'none'};">+</span>
+                            <input type="number" value="${dmgNum}"
+                              placeholder="3"
+                              oninput="const sign=document.getElementById('dmg-sign-${section}-${idx}');sign.style.display=this.value<0?'none':'inline';"
+                              onchange="mbDraftEntryAtk('${section}',${idx},'dmgBonus',this.value.trim())"
+                              style="${MBS.field}width:100%;text-align:center;padding-left:${showPrefix?'20px':'10px'};">
+                          `
+                        })()}
+                      </div>
+                    </div>
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Type</div>
+                      <input type="text" value="${mbEsc(dmgType)}"
+                        placeholder="slashing"
+                        onchange="mbDraftEntryAtk('${section}',${idx},'dmgType',this.value.trim())"
+                        style="${MBS.field}width:100%;">
+                    </div>
+                  </div>
                 </div>
+                <div style="margin-top:10px;">
+                  ${circleToggle(
+                    'show-additional-' + section + '-' + idx,
+                    showAdditional,
+                    `mbDraftEntryAtk('${section}',${idx},'showAdditional',!mb.draft.${section}[${idx}].attack.showAdditional)`,
+                    'Add Additional Damage'
+                  )}
+                </div>
+                ${showAdditional ? `
+                <div style="margin-top:10px;">
+                  <label style="${MBS.label}">ADDITIONAL DAMAGE</label>
+                  <div style="display:grid;grid-template-columns:90px 80px 1fr;gap:6px;align-items:end;">
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Dice Amount</div>
+                      <input type="text" value="${mbEsc(additionalDiceCount)}"
+                        placeholder="2"
+                        onchange="mbDraftEntryAtk('${section}',${idx},'additionalDiceCount',this.value.trim())"
+                        style="${MBS.field}width:100%;text-align:center;">
+                    </div>
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Die</div>
+                      <select value="${additionalDieType}"
+                        onchange="mbDraftEntryAtk('${section}',${idx},'additionalDieType',this.value)"
+                        style="${MBS.field}width:100%;padding:8px 4px;">
+                        ${['d2','d4','d6','d8','d10','d12','d20'].map(d =>
+                          `<option value="${d}" ${additionalDieType===d?'selected':''}>${d}</option>`
+                        ).join('')}
+                      </select>
+                    </div>
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Type</div>
+                      <input type="text" value="${mbEsc(additionalDmgType)}"
+                        placeholder="acid"
+                        onchange="mbDraftEntryAtk('${section}',${idx},'additionalDmgType',this.value.trim())"
+                        style="${MBS.field}width:100%;">
+                    </div>
+                  </div>
+                </div>
+                ` : ''}
+                <div style="margin-top:10px;">
+                  ${circleToggle(
+                    'show-alternate-' + section + '-' + idx,
+                    showAlternate,
+                    `mbDraftEntryAtk('${section}',${idx},'showAlternate',!mb.draft.${section}[${idx}].attack.showAlternate)`,
+                    'Add Alternate Damage'
+                  )}
+                </div>
+                ${showAlternate ? `
+                <div style="margin-top:10px;">
+                  <label style="${MBS.label}">ALTERNATE DAMAGE</label>
+                  <div style="display:grid;grid-template-columns:90px 80px 110px 1fr;gap:6px;align-items:end;">
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Dice Amount</div>
+                      <input type="text" value="${mbEsc(altDiceCount)}"
+                        placeholder="2"
+                        onchange="mbDraftEntryAtk('${section}',${idx},'altDiceCount',this.value.trim())"
+                        style="${MBS.field}width:100%;text-align:center;">
+                    </div>
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Die</div>
+                      <select value="${altDieType}"
+                        onchange="mbDraftEntryAtk('${section}',${idx},'altDieType',this.value)"
+                        style="${MBS.field}width:100%;padding:8px 4px;">
+                        ${['d2','d4','d6','d8','d10','d12','d20'].map(d =>
+                          `<option value="${d}" ${altDieType===d?'selected':''}>${d}</option>`
+                        ).join('')}
+                      </select>
+                    </div>
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Bonus</div>
+                      <div style="position:relative;display:inline-block;width:100%;">
+                        ${(() => {
+                          const val = String(altDmgBonus).replace(/^[\+\-]/, '')
+                          const altNum = parseInt(val) || 0
+                          const showPrefix = altNum >= 0
+                          return `
+                            <span id="alt-dmg-sign-${section}-${idx}" style="position:absolute;left:10px;top:50%;transform:translateY(-50%);
+                                         color:#e0d5c5;font-size:13px;pointer-events:none;display:${showPrefix?'inline':'none'};">+</span>
+                            <input type="number" value="${altNum}"
+                              placeholder="3"
+                              oninput="const sign=document.getElementById('alt-dmg-sign-${section}-${idx}');sign.style.display=this.value<0?'none':'inline';"
+                              onchange="mbDraftEntryAtk('${section}',${idx},'altDmgBonus',this.value.trim())"
+                              style="${MBS.field}width:100%;text-align:center;padding-left:${showPrefix?'20px':'10px'};">
+                          `
+                        })()}
+                      </div>
+                    </div>
+                    <div>
+                      <div style="font-size:9px;color:#888;margin-bottom:2px;">Type</div>
+                      <input type="text" value="${mbEsc(altDmgType)}"
+                        placeholder="fire"
+                        onchange="mbDraftEntryAtk('${section}',${idx},'altDmgType',this.value.trim())"
+                        style="${MBS.field}width:100%;">
+                    </div>
+                  </div>
+                </div>
+                ` : ''}
               </div>
-            ` : ''}
+              `
+            })() : ''}
           </div>
         ` : ''}
         <div style="display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #2E2F2D;padding-top:10px;margin-top:4px;">
@@ -1761,15 +2265,17 @@ function mbRenderEnvironments() {
   const d = mb.draft
   return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
-      ${MB_ENVIRONMENTS.map(env => `
+      ${MB_ENVIRONMENTS.map(env => {
+        const isOn = (d.environments||[]).includes(env)
+        return `
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;
-                      font-size:13px;color:#e0d5c5;padding:5px;">
-          <input type="checkbox" ${(d.environments||[]).includes(env)?'checked':''}
-            onchange="mbToggleEnvironment('${env}',this.checked)"
-            style="width:15px;height:15px;cursor:pointer;accent-color:#4587A2;">
+                      font-size:13px;color:#e0d5c5;padding:5px;"
+          onclick="mbToggleEnvironment('${env}',!${isOn})">
+          <div style="width:16px;height:16px;border-radius:50%;border:2px solid ${isOn?'#4587A2':'#666'};
+                      background:${isOn?'#4587A2':'transparent'};flex-shrink:0;transition:all 0.2s;"></div>
           ${env}
         </label>
-      `).join('')}
+      `}).join('')}
     </div>
   `
 }
@@ -1778,19 +2284,9 @@ function mbRenderDescription() {
   const d = mb?.draft || {}
   return `
     <div style="display:flex;flex-direction:column;gap:10px;">
-      <div style="display:flex;gap:16px;align-items:center;">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;">
-          <input type="checkbox" id="mb-homebrew" ${d.homebrew ? 'checked' : ''}
-            onchange="mb.draft.homebrew=this.checked;if(this.checked){mb.draft.thirdParty=false;const tp=document.getElementById('mb-thirdparty');if(tp)tp.checked=false;}mb.dirty=true;"
-            style="accent-color:#4587A2;width:16px;height:16px;cursor:pointer;">
-          <span style="font-size:11px;color:#4587A2;letter-spacing:.08em;font-weight:700;">HOMEBREW</span>
-        </label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;">
-          <input type="checkbox" id="mb-thirdparty" ${d.thirdParty ? 'checked' : ''}
-            onchange="mb.draft.thirdParty=this.checked;if(this.checked){mb.draft.homebrew=false;const hb=document.getElementById('mb-homebrew');if(hb)hb.checked=false;}mb.dirty=true;"
-            style="accent-color:#4587A2;width:16px;height:16px;cursor:pointer;">
-          <span style="font-size:11px;color:#4587A2;letter-spacing:.08em;font-weight:700;">THIRD PARTY</span>
-        </label>
+      <div style="display:flex;gap:16px;align-items:center;transform:scale(0.8);transform-origin:left center;">
+        ${circleToggle('mb-homebrew', d.homebrew, 'mbToggleHomebrew()', 'HOMEBREW', true)}
+        ${circleToggle('mb-thirdparty', d.thirdParty, 'mbToggleThirdParty()', 'THIRD PARTY', true)}
       </div>
       <div>
         <label style="${MBS.label}">SOURCE</label>
@@ -1810,14 +2306,20 @@ function mbRenderDescription() {
 
 // ── State update helpers ──────────────────────────────────────────
 function mbUpdateHpAvg() {
-  const {auto, display} = mbHpDisplay(mb.draft)
-  mb.draft.hpValue = auto
+  const hpInfo = mbHpDisplay(mb.draft)
+  mb.draft.hpValue = hpInfo.auto
   mb.dirty = true
   // ONLY update the HP value input and formula display — never touch drums or re-render sections
   const valEl = document.getElementById('mb-hp-val')
-  if (valEl) valEl.value = auto
-  const dispEl = document.getElementById('mb-hp-display')
-  if (dispEl) dispEl.textContent = display
+  if (valEl) valEl.value = hpInfo.auto
+  const calcEl = document.getElementById('mb-hp-calculated')
+  if (calcEl) calcEl.textContent = hpInfo.calculated
+  const minEl = document.getElementById('mb-hp-min')
+  if (minEl) minEl.textContent = `Minimum: ${hpInfo.min}`
+  const avgEl = document.getElementById('mb-hp-avg')
+  if (avgEl) avgEl.textContent = `Average: ${hpInfo.avg}`
+  const maxEl = document.getElementById('mb-hp-max')
+  if (maxEl) maxEl.textContent = `Maximum: ${hpInfo.max}`
   // Do NOT call any render functions, do NOT update mbDrumState, do NOT trigger section refreshes
 }
 
@@ -1844,8 +2346,19 @@ function mbUpdateInitiative() {
   if (initInput) initInput.value = mod
 }
 
+function mbUpdateProficiencyDisplay() {
+  const profDisplay = document.getElementById('mb-proficiency-display')
+  if (profDisplay && mb.draft) {
+    const prof = mb.draft.proficiencyBonus || 0
+    profDisplay.textContent = (prof >= 0 ? '+' : '') + prof
+  }
+}
+
 
 function mbRefreshSection(dataKey) {
+  const content = document.getElementById('content')
+  const savedScroll = content ? content.scrollTop : 0  // SAVE before DOM update
+
   const idMap = {
     savingThrows:'ST', skills:'Skills', spells:'Spells',
     traits:'traits', actions:'actions', reactions:'reactions',
@@ -1855,6 +2368,30 @@ function mbRefreshSection(dataKey) {
   const sectId = idMap[dataKey] || dataKey
   const el = document.getElementById('mb-sect-' + sectId)
   if (!el) return
+
+  // Save picker dropdown scroll positions before rebuilding HTML
+  let stPickerScroll = 0, stModScroll = 0, skillPickerScroll = 0, skillModScroll = 0
+  const atkScrolls = new Map()
+
+  if (dataKey === 'savingThrows') {
+    const stPicker = document.getElementById('mb-st-picker-list')
+    const stMod = document.getElementById('mb-st-mod-list')
+    if (stPicker) stPickerScroll = stPicker.scrollTop
+    if (stMod) stModScroll = stMod.scrollTop
+  } else if (dataKey === 'skills') {
+    const skillPicker = document.getElementById('mb-skill-picker-list')
+    const skillMod = document.getElementById('mb-skill-mod-list')
+    if (skillPicker) skillPickerScroll = skillPicker.scrollTop
+    if (skillMod) skillModScroll = skillMod.scrollTop
+  } else if (['traits', 'actions', 'reactions', 'legendaryActions', 'bonusActions'].includes(dataKey)) {
+    // Save all attack bonus picker scroll positions in this section
+    const atkLists = document.querySelectorAll(`[id^="mb-atk-list-${dataKey}-"]`)
+    atkLists.forEach(list => {
+      const match = list.id.match(/mb-atk-list-(.+)-(\d+)/)
+      if (match) atkScrolls.set(`${match[1]}-${match[2]}`, list.scrollTop)
+    })
+  }
+
   if (dataKey === 'savingThrows') el.innerHTML = mbRenderSavingThrows()
   else if (dataKey === 'skills') el.innerHTML = mbRenderSkills()
   else if (dataKey === 'spells') {
@@ -1865,7 +2402,44 @@ function mbRefreshSection(dataKey) {
     if (window.npcb && window.npcbRenderNotes) el.innerHTML = window.npcbRenderNotes()
     else if (window.pcb && window.pcbRenderNotes) el.innerHTML = window.pcbRenderNotes()
   }
-  else el.innerHTML = mbRenderAbilityGroup(dataKey, dataKey==='actions'||dataKey==='legendaryActions')
+  else {
+    // Enable attack UI for all action types except traits
+    const withAttack = ['actions', 'bonusActions', 'reactions', 'legendaryActions', 'lairActions'].includes(dataKey)
+    el.innerHTML = mbRenderAbilityGroup(dataKey, withAttack)
+  }
+
+  // Restore picker dropdown scroll positions after rebuilding HTML
+  if (dataKey === 'savingThrows') {
+    const stPicker = document.getElementById('mb-st-picker-list')
+    const stMod = document.getElementById('mb-st-mod-list')
+    if (stPicker) stPicker.scrollTop = stPickerScroll
+    if (stMod) stMod.scrollTop = stModScroll
+  } else if (dataKey === 'skills') {
+    const skillPicker = document.getElementById('mb-skill-picker-list')
+    const skillMod = document.getElementById('mb-skill-mod-list')
+    if (skillPicker) skillPicker.scrollTop = skillPickerScroll
+    if (skillMod) skillMod.scrollTop = skillModScroll
+  } else if (['traits', 'actions', 'reactions', 'legendaryActions', 'bonusActions', 'lairActions'].includes(dataKey)) {
+    // Restore all attack bonus picker scroll positions in this section
+    atkScrolls.forEach((scrollTop, key) => {
+      const list = document.getElementById(`mb-atk-list-${key}`)
+      if (list) list.scrollTop = scrollTop
+    })
+
+    // Center the selected item in all attack bonus pickers for this section
+    setTimeout(() => {
+      document.querySelectorAll(`[id^="mb-atk-picker-${dataKey}-"]`).forEach(picker => {
+        const selected = picker.querySelector('[data-selected="true"]')
+        if (selected) {
+          // Calculate position relative to picker, not document
+          const itemTop = selected.offsetTop - picker.offsetTop
+          picker.scrollTop = itemTop - (picker.clientHeight / 2) + (selected.clientHeight / 2)
+        }
+      })
+    }, 0)
+  }
+
+  if (content) content.scrollTop = savedScroll  // RESTORE after DOM update
 }
 
 // ── Picker handlers ───────────────────────────────────────────────
@@ -1885,9 +2459,11 @@ function mbAddSavingThrow(ability, mod) {
 }
 
 function mbRemoveSavingThrow(idx) {
-  mb.draft.savingThrows.splice(idx, 1)
-  mb.dirty = true
-  mbRefreshSection('savingThrows')
+  window.confirmDelete('Delete?', () => {
+    mb.draft.savingThrows.splice(idx, 1)
+    mb.dirty = true
+    mbRefreshSection('savingThrows')
+  })
 }
 
 function mbToggleSkillPicker() {
@@ -1903,13 +2479,23 @@ function mbAddSkill(name, mod) {
   mb.dirty = true
   mb.skillPickerOpen = false; mb.skillPickerName = null; mb.skillPickerMod = 0
   mbRefreshSection('skills')
+  // Update passive senses if Perception, Insight, or Investigation changed
+  if (name === 'Perception' || name === 'Insight' || name === 'Investigation') {
+    if (window.pcbUpdatePassiveSenses) pcbUpdatePassiveSenses()
+  }
 }
 
 function mbRemoveSkill(idx) {
-  const wasPerc = mb.draft.skills[idx]?.name === 'Perception'
-  mb.draft.skills.splice(idx, 1)
-  mb.dirty = true
-  mbRefreshSection('skills')
+  window.confirmDelete('Delete?', () => {
+    const skillName = mb.draft.skills[idx]?.name
+    mb.draft.skills.splice(idx, 1)
+    mb.dirty = true
+    mbRefreshSection('skills')
+    // Update passive senses if Perception, Insight, or Investigation removed
+    if (skillName === 'Perception' || skillName === 'Insight' || skillName === 'Investigation') {
+      if (window.pcbUpdatePassiveSenses) pcbUpdatePassiveSenses()
+    }
+  })
 }
 
 // ── Ability group handlers ────────────────────────────────────────
@@ -1948,9 +2534,27 @@ function mbDraftEntryLUCount(section, idx, count) {
   mb.dirty = true
 }
 
+// parseDamageString is now defined in renderer.js and exposed as window.parseDamageString
+// No local declaration needed - use window.parseDamageString directly
+
 function mbToggleAttack(section, idx, on) {
   if (!mb.draft[section]?.[idx]) return
-  mb.draft[section][idx].attack = on ? {bonus:0, dmg:''} : null
+  mb.draft[section][idx].attack = on ? {
+    atk: '—',
+    diceCount: '',
+    dieType: 'd6',
+    dmgBonus: '',
+    dmgType: '',
+    additionalDiceCount: '',
+    additionalDieType: 'd6',
+    additionalDmgType: '',
+    showAdditional: false,
+    altDiceCount: '',
+    altDieType: 'd6',
+    altDmgBonus: '',
+    altDmgType: '',
+    showAlternate: false
+  } : null
   mb.dirty = true
   mbRefreshSection(section)
 }
@@ -1959,13 +2563,19 @@ function mbDraftEntryAtk(section, idx, field, value) {
   if (!mb.draft[section]?.[idx]?.attack) return
   mb.draft[section][idx].attack[field] = value
   mb.dirty = true
+  // If toggling showAdditional or showAlternate, refresh to show/hide the fields
+  if (field === 'showAdditional' || field === 'showAlternate') {
+    mbRefreshSection(section)
+  }
 }
 
 function mbDeleteEntry(section, idx) {
-  mb.draft[section].splice(idx, 1)
-  mb.dirty = true
-  if (mb.editingEntry?.section === section) mb.editingEntry = null
-  mbRefreshSection(section)
+  window.confirmDelete('Delete?', () => {
+    mb.draft[section].splice(idx, 1)
+    mb.dirty = true
+    if (mb.editingEntry?.section === section) mb.editingEntry = null
+    mbRefreshSection(section)
+  })
 }
 
 function mbAddEntry(section, withAttack) {
@@ -1980,25 +2590,131 @@ function mbAddEntry(section, withAttack) {
   }, 50)
 }
 
-// ── Drag & drop ───────────────────────────────────────────────────
-function mbDragStart(section, idx) {
+// ── Mouse-based drag & drop ───────────────────────────────────────
+function mbStartDrag(event, section, idx) {
+  event.preventDefault()
+  event.stopPropagation()
+
+  // Set drag state
   mb.dragSect = section
   mb.dragIdx = idx
+  mb.isDragging = true
+
+  // Change cursor
+  const handle = event.currentTarget
+  handle.style.cursor = 'grabbing'
+
+  // Attach document-level mouse listeners
+  document.addEventListener('mousemove', mbMouseDrag)
+  document.addEventListener('mouseup', mbMouseDrop)
+
+  // Prevent text selection during drag
+  document.body.style.userSelect = 'none'
 }
 
-function mbDrop(section, targetIdx) {
-  if (mb.dragSect !== section || mb.dragIdx === null || mb.dragIdx === targetIdx) {
-    mb.dragIdx = null; return
+function mbMouseDrag(event) {
+  if (!mb.isDragging || mb.dragIdx == null || !mb.dragSect) return
+
+  // Find which item we're hovering over
+  const items = document.querySelectorAll(`[data-drag-item="${mb.dragSect}"]`)
+  let dropIdx = items.length // Default to end
+
+  for (let i = 0; i < items.length; i++) {
+    const rect = items[i].getBoundingClientRect()
+    const midY = rect.top + rect.height / 2
+
+    if (event.clientY < midY) {
+      dropIdx = i
+      break
+    }
   }
-  const arr = mb.draft[section]
-  if (!arr) return
-  const item = arr.splice(mb.dragIdx, 1)[0]
-  const newIdx = mb.dragIdx < targetIdx ? targetIdx - 1 : targetIdx
-  arr.splice(newIdx, 0, item)
-  mb.dirty = true
+
+  // Only update if position changed
+  if (mb.dropTarget !== dropIdx) {
+    mb.dropTarget = dropIdx
+    mbUpdateDropIndicator(mb.dragSect, dropIdx)
+  }
+}
+
+function mbMouseDrop(event) {
+  if (!mb.isDragging) return
+
+  // Remove listeners
+  document.removeEventListener('mousemove', mbMouseDrag)
+  document.removeEventListener('mouseup', mbMouseDrop)
+
+  // Restore user selection
+  document.body.style.userSelect = ''
+
+  // Perform the drop if we have a valid target
+  if (mb.dropTarget != null && mb.dragIdx != null && mb.dragSect) {
+    const section = mb.dragSect
+    const arr = mb.draft[section]
+
+    if (arr && mb.dragIdx !== mb.dropTarget) {
+      const dragIdx = mb.dragIdx
+      const dropIdx = mb.dropTarget
+
+      // Remove item from original position
+      const [item] = arr.splice(dragIdx, 1)
+
+      // Calculate final insert position
+      const finalIdx = dragIdx < dropIdx ? dropIdx - 1 : dropIdx
+
+      // Insert at new position
+      arr.splice(finalIdx, 0, item)
+
+      mb.dirty = true
+      if (mb.editingEntry?.section === section) mb.editingEntry = null
+
+      mbRefreshSection(section)
+    }
+  }
+
+  // Clean up drag state
+  mb.isDragging = false
   mb.dragIdx = null
-  if (mb.editingEntry?.section === section) mb.editingEntry = null
-  mbRefreshSection(section)
+  mb.dragSect = null
+  mb.dropTarget = null
+
+  // Remove indicator
+  const indicator = document.querySelector('.mb-drop-indicator')
+  if (indicator) indicator.remove()
+}
+
+function mbUpdateDropIndicator(section, dropIdx) {
+  // Remove existing indicator
+  const existing = document.querySelector('.mb-drop-indicator')
+  if (existing) existing.remove()
+
+  // Don't show indicator on the dragged item itself
+  if (mb.dragIdx === dropIdx) return
+
+  // Find the section container
+  const container = document.getElementById(`mb-sect-${section}`) ||
+                    document.getElementById(`mb-sect-${section === 'savingThrows' ? 'ST' : section === 'skills' ? 'Skills' : section}`)
+  if (!container) return
+
+  // Get all drag items in this section
+  const items = Array.from(container.querySelectorAll(`[data-drag-item="${section}"]`))
+
+  // Create indicator
+  const indicator = document.createElement('div')
+  indicator.className = 'mb-drop-indicator'
+  indicator.style.cssText = 'height:2px;background:#4587A2;border-radius:1px;margin:2px 0;pointer-events:none;'
+
+  // Insert indicator at the correct position
+  if (dropIdx < items.length) {
+    // Insert before the target item
+    items[dropIdx].parentNode.insertBefore(indicator, items[dropIdx])
+  } else if (items.length > 0) {
+    // Insert after the last item
+    const lastItem = items[items.length - 1]
+    lastItem.parentNode.insertBefore(indicator, lastItem.nextSibling)
+  } else {
+    // No items, append to container
+    container.appendChild(indicator)
+  }
 }
 
 // ── Spells ────────────────────────────────────────────────────────
@@ -2038,9 +2754,11 @@ function mbAddSpell(name, level) { mbAddSpellWithUsage(name, level, 'slot', 0) }
 
 function mbRemoveSpell(idx) {
   if (!Array.isArray(mb.draft.selectedSpells)) mb.draft.selectedSpells = []
-  mb.draft.selectedSpells.splice(idx, 1)
-  mb.dirty = true
-  mbRefreshSection('spells')
+  window.confirmDelete('Delete spell?', () => {
+    mb.draft.selectedSpells.splice(idx, 1)
+    mb.dirty = true
+    mbRefreshSection('spells')
+  })
 }
 
 // ── Environments ──────────────────────────────────────────────────
@@ -2072,8 +2790,40 @@ function mbPortraitPick() {
 }
 
 // ── Save / Back ───────────────────────────────────────────────────
+// Delete monster
+function mbDelete() {
+  if (!mb.originalName) return
+
+  if (confirm(`Delete monster "${mb.originalName}"?\n\nThis action cannot be undone.`)) {
+    // Use the stored reference to the exact monster being edited
+    // This ensures we only delete the specific entry, not all entries with the same name
+    const monsterToDelete = mb.editingMonster || compendiumData.monsters.find(m => m.name === mb.originalName && m._custom)
+
+    if (monsterToDelete) {
+      // Delete by filtering out the exact object reference
+      compendiumData.monsters = compendiumData.monsters.filter(m => m !== monsterToDelete)
+
+      // Save to storage
+      saveCompendium({ monsters: compendiumData.monsters, spells: compendiumData.spells })
+
+      showToast(`Monster "${mb.originalName}" deleted`)
+    } else {
+      showToast(`Error: Could not find monster to delete`)
+      return
+    }
+
+    // Clear navigation history to avoid landing on deleted monster's stat block
+    navHistory = []
+    currentScreen = { screen: 'monsters', uid: null }
+
+    // Navigate directly to monster list
+    showSection('monsters', true)
+  }
+}
+
 function mbSave() {
   const d = mb.draft
+
   if (!d.name || !d.name.trim()) {
     showToast('Please enter a monster name.')
     return
@@ -2119,9 +2869,30 @@ function mbSave() {
         const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
         return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
       }),
-      reactions: entry.reactions || [],
-      legendaries: entry.legendaries || [],
-      lairs: entry.lairs || [],
+      bonusActions: (entry.bonusActions || []).map(a => {
+        const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+        const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+        const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+        return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+      }),
+      reactions: (entry.reactions || []).map(a => {
+        const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+        const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+        const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+        return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+      }),
+      legendaries: (entry.legendaries || []).map(a => {
+        const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+        const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+        const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+        return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+      }),
+      lairs: (entry.lairs || []).map(a => {
+        const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+        const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+        const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+        return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+      }),
       spellSlots,
       dailySpells: parseDailySpells(traits),
       spells: parseMonsterSpells(entry.spells, traits, entry.actions),
@@ -2166,8 +2937,6 @@ function mbSave() {
     compendiumData.monsters.sort((a,b) => a.name.localeCompare(b.name))
   }
 
-  const stored = compendiumData.monsters.find(m => m.name === entry.name)
-
   saveCompendium({monsters: compendiumData.monsters, spells: compendiumData.spells})
   mb.dirty = false
   showToast(`Monster "${entry.name}" saved.`)
@@ -2202,7 +2971,7 @@ function mbBack() {
           You have unsaved changes that will be lost.
         </div>
         <div style="display:flex;gap:10px;justify-content:center;">
-          <button onclick="document.getElementById('mb-discard-overlay').remove();mb.encounterOnlyMode=false;window.encounterContext=null;if(typeof enterEncounterBuilder==='function')enterEncounterBuilder();else if(typeof popNav==='function')popNav();else showSection('encounter',true)"
+          <button onclick="document.getElementById('mb-discard-overlay').remove();mb.encounterOnlyMode=false;window.encounterContext=null;mb.draft=null;mb.dirty=false;if(typeof enterEncounterBuilder==='function')enterEncounterBuilder();else if(typeof popNav==='function')popNav();else showSection('encounter',true)"
             style="${MBS.btnPrimary}">Discard</button>
           <button onclick="document.getElementById('mb-discard-overlay').remove()"
             style="${MBS.btnSecondary}">Keep Editing</button>
@@ -2231,7 +3000,7 @@ function mbBack() {
         You have unsaved changes that will be lost.
       </div>
       <div style="display:flex;gap:10px;justify-content:center;">
-        <button onclick="document.getElementById('mb-discard-overlay').remove();if(typeof popNav==='function')popNav();else showSection('monsters')"
+        <button onclick="document.getElementById('mb-discard-overlay').remove();mb.draft=null;mb.dirty=false;if(typeof popNav==='function')popNav();else showSection('monsters')"
           style="${MBS.btnPrimary}">Discard</button>
         <button onclick="document.getElementById('mb-discard-overlay').remove()"
           style="${MBS.btnSecondary}">Keep Editing</button>
@@ -2241,24 +3010,91 @@ function mbBack() {
   document.body.appendChild(overlay)
 }
 
+// ── Circle Toggle Helpers ─────────────────────────────────────────
+function mbToggleHomebrew() {
+  mb.draft.homebrew = !mb.draft.homebrew
+
+  // If homebrew is now ON, turn third party OFF
+  if (mb.draft.homebrew) {
+    mb.draft.thirdParty = false
+    const otherCircle = document.getElementById('circle-mb-thirdparty')
+    if (otherCircle) {
+      otherCircle.style.background = 'transparent'
+      otherCircle.style.borderColor = '#666'
+    }
+  }
+
+  // Update homebrew circle visual state
+  const circle = document.getElementById('circle-mb-homebrew')
+  if (circle) {
+    circle.style.background = mb.draft.homebrew ? '#4587A2' : 'transparent'
+    circle.style.borderColor = mb.draft.homebrew ? '#4587A2' : '#666'
+  }
+
+  mb.dirty = true
+}
+
+function mbToggleThirdParty() {
+  mb.draft.thirdParty = !mb.draft.thirdParty
+
+  // If third party is now ON, turn homebrew OFF
+  if (mb.draft.thirdParty) {
+    mb.draft.homebrew = false
+    const otherCircle = document.getElementById('circle-mb-homebrew')
+    if (otherCircle) {
+      otherCircle.style.background = 'transparent'
+      otherCircle.style.borderColor = '#666'
+    }
+  }
+
+  // Update third party circle visual state
+  const circle = document.getElementById('circle-mb-thirdparty')
+  if (circle) {
+    circle.style.background = mb.draft.thirdParty ? '#4587A2' : 'transparent'
+    circle.style.borderColor = mb.draft.thirdParty ? '#4587A2' : '#666'
+  }
+
+  mb.dirty = true
+}
+
+function mbToggleAlignmentTypically() {
+  mb.draft.alignmentTypically = !mb.draft.alignmentTypically
+
+  // Update circle visual state
+  const circle = document.getElementById('circle-mb-alignment-typically')
+  if (circle) {
+    circle.style.background = mb.draft.alignmentTypically ? '#4587A2' : 'transparent'
+    circle.style.borderColor = mb.draft.alignmentTypically ? '#4587A2' : '#666'
+  }
+
+  mb.dirty = true
+}
+
 // ── Global exposure for inline onclick handlers ───────────────────
 window.openMonsterBuilder = openMonsterBuilder
+window.mbDelete = mbDelete
 window.mbBack = mbBack
 window.mbSave = mbSave
 window.mbStartScratch = mbStartScratch
 window.mbShowMonsterPicker = mbShowMonsterPicker
 window.mbCancelMonsterPicker = mbCancelMonsterPicker
 window.mbFilterMonsterPicker = mbFilterMonsterPicker
+window.mbUpdateMonsterResults = mbUpdateMonsterResults
 window.mbSelectMonster = mbSelectMonster
 window.mbPortraitPick = mbPortraitPick
+window.mbToggleHomebrew = mbToggleHomebrew
+window.mbToggleThirdParty = mbToggleThirdParty
+window.mbToggleAlignmentTypically = mbToggleAlignmentTypically
 window.mbToggleStPicker = mbToggleStPicker
 window.mbAddSavingThrow = mbAddSavingThrow
 window.mbRemoveSavingThrow = mbRemoveSavingThrow
 window.mbToggleSkillPicker = mbToggleSkillPicker
 window.mbAddSkill = mbAddSkill
 window.mbRemoveSkill = mbRemoveSkill
-window.mbDragStart = mbDragStart
-window.mbDrop = mbDrop
+window.mbStartDrag = mbStartDrag
+window.mbMouseDrag = mbMouseDrag
+window.mbMouseDrop = mbMouseDrop
+window.mbUpdateDropIndicator = mbUpdateDropIndicator
 window.MBS = MBS
 window.MB_SIZES = MB_SIZES
 window.MB_TYPES = MB_TYPES
@@ -2274,6 +3110,7 @@ window.MB_CONDITIONS = MB_CONDITIONS
 window.MB_TAG_OPTIONS = MB_TAG_OPTIONS
 window.MB_CR_TABLE = MB_CR_TABLE
 window.mbEsc = mbEsc
+// parseDamageString exposed by renderer.js - no need to re-assign here
 window.mbBuildCompendiumEntry = mbBuildCompendiumEntry
 window.mbCardWrap = mbCardWrap
 window.mbRenderHeader = mbRenderHeader
@@ -2311,6 +3148,8 @@ window.mbToggleEnvironment = mbToggleEnvironment
 window.mbRefreshSection = mbRefreshSection
 window.mbUpdateHpAvg = mbUpdateHpAvg
 window.mbUpdateInitiative = mbUpdateInitiative
+window.mbUpdateProficiencyDisplay = mbUpdateProficiencyDisplay
+window.mbProficiencyFromCR = mbProficiencyFromCR
 window.mbAvgHp = mbAvgHp
 window.mbModStr = mbModStr
 window.mbSpeedSetType = mbSpeedSetType

@@ -2,25 +2,31 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>DM's Companion</title>
+  <title>Farsight Keep</title>
   <style>
-    @font-face {
-      font-family: 'Metamorphous';
-      src: url('assets/Fonts/Metamorphous-Regular.ttf') format('truetype');
-      font-weight: normal;
-      font-style: normal;
-    }
-    @font-face {
-      font-family: 'MedievalSharp';
-      src: url('assets/Fonts/MedievalSharp-Regular.ttf') format('truetype');
-      font-weight: normal;
-      font-style: normal;
-    }
     @font-face {
       font-family: 'Cinzel';
       src: url('assets/Fonts/Cinzel-VariableFont_wght.ttf') format('truetype');
       font-weight: 100 900;
       font-style: normal;
+    }
+    @font-face {
+      font-family: 'Grenze';
+      src: url('assets/Fonts/Grenze-Regular.ttf') format('truetype');
+      font-weight: 400;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Grenze';
+      src: url('assets/Fonts/Grenze-Bold.ttf') format('truetype');
+      font-weight: 700;
+      font-style: normal;
+    }
+    @font-face {
+      font-family: 'Grenze';
+      src: url('assets/Fonts/Grenze-Italic.ttf') format('truetype');
+      font-weight: 400;
+      font-style: italic;
     }
 
     :root {
@@ -44,14 +50,33 @@
     input[placeholder*="Filter"]::placeholder { color: #1E231A; opacity: 1; }
     input[placeholder*="Search"]::-webkit-input-placeholder,
     input[placeholder*="Filter"]::-webkit-input-placeholder { color: #1E231A; }
+
+    /* Font-specific sizing and spacing */
+    body.font-grenze {
+      font-size: 17px !important;
+      letter-spacing: 0.05em !important;
+    }
+    body.font-grenze * {
+      font-size: 1em !important;
+      letter-spacing: 0.05em !important;
+    }
+
+    body.font-times {
+      font-size: 16px !important;
+      letter-spacing: 0.05em !important;
+    }
+    body.font-times * {
+      font-size: 1em !important;
+      letter-spacing: 0.05em !important;
+    }
   </style>
 </head>
 <body>
   <div id="app"></div>
   <script src="renderer.js"></script>
   <script src="monster-builder.js"></script>
+  <script src="spell-builder.js"></script>
   <script src="npc-builder.js"></script>
   <script src="pc-builder.js"></script>
-  <script src="renderer-patch.js"></script>
 </body>
 </html>

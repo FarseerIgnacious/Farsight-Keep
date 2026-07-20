@@ -1,8 +1,9 @@
 const path = require('path')
 const fs   = require('fs')
 const os   = require('os')
+const { ipcRenderer } = require('electron')
 
-const DATA_DIR  = path.join(os.homedir(), '.dm-companion')
+const DATA_DIR  = ipcRenderer.sendSync('get-user-data-path')
 const COMP_FILE = path.join(DATA_DIR, 'compendium.json')
 const CAMP_FILE = path.join(DATA_DIR, 'campaigns.json')
 const ENC_FILE  = path.join(DATA_DIR, 'encounters.json')
@@ -10,6 +11,28 @@ const ENC_FILE  = path.join(DATA_DIR, 'encounters.json')
 function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
 }
+
+// One-time migration from the old hand-rolled ~/.dm-companion location to
+// Electron's standard userData path. Leaves the legacy folder in place.
+function migrateLegacyData() {
+  const legacyDir = path.join(os.homedir(), '.dm-companion')
+  if (!fs.existsSync(legacyDir)) return
+
+  const hasNewData = fs.existsSync(COMP_FILE) || fs.existsSync(CAMP_FILE) || fs.existsSync(ENC_FILE)
+  if (hasNewData) return
+
+  ensureDir()
+  for (const [filename, dest] of [
+    ['compendium.json', COMP_FILE],
+    ['campaigns.json', CAMP_FILE],
+    ['encounters.json', ENC_FILE],
+  ]) {
+    const src = path.join(legacyDir, filename)
+    if (fs.existsSync(src)) fs.copyFileSync(src, dest)
+  }
+}
+
+migrateLegacyData()
 
 function saveCompendium(data) {
   ensureDir()

@@ -1,5 +1,125 @@
 const { saveCompendium, loadCompendium, saveCampaigns, loadCampaigns, saveEncounters, loadEncounters } = require('./storage.js')
 
+// ── Size Expansion Utility ────────────────────────────────────────
+// Converts single-letter size abbreviations to full names
+function expandSize(size) {
+  const map = {T:'Tiny', S:'Small', M:'Medium', L:'Large', H:'Huge', G:'Gargantuan'}
+  return map[size] || size
+}
+window.expandSize = expandSize
+
+// ── Universal Circle Toggle (FIX 2 & 6) ───────────────────────────
+function circleToggle(id, isOn, onClickCode, labelText, boldLabel = false) {
+  const circleColor = isOn ? '#4587A2' : 'transparent'
+  const borderColor = isOn ? '#4587A2' : '#666'
+  const labelStyle = boldLabel
+    ? 'color:#4587A2;font-size:13px;font-weight:bold;letter-spacing:0.05em;'
+    : 'color:#e0d5c5;font-size:14px;'
+
+  return `<div style="display:flex;align-items:center;gap:10px;">
+    <div id="circle-${id}" style="width:20px;height:20px;border-radius:50%;border:2px solid ${borderColor};
+                background:${circleColor};flex-shrink:0;transition:all 0.2s;cursor:pointer;"
+      onclick="const circle = document.getElementById('circle-${id}'); const newState = circle.style.background === 'transparent'; circle.style.background = newState ? '#4587A2' : 'transparent'; circle.style.borderColor = newState ? '#4587A2' : 'rgb(102, 102, 102)'; ${onClickCode}"></div>
+    <span style="${labelStyle}cursor:pointer;"
+      onclick="const circle = document.getElementById('circle-${id}'); const newState = circle.style.background === 'transparent'; circle.style.background = newState ? '#4587A2' : 'transparent'; circle.style.borderColor = newState ? '#4587A2' : 'rgb(102, 102, 102)'; ${onClickCode}">${labelText}</span>
+  </div>`
+}
+
+// ── Three-State Filter Toggle Button ──────────────────────────────
+// Creates a button that cycles: Grey (all) → Blue (only) → Red (exclude) → Grey
+// filterKey: 'homebrew', 'thirdParty', 'spellcaster'
+// label: button text
+
+// Define state values for each filter type
+const threeStateMap = {
+  homebrew: { grey: '', blue: 'homebrew', red: 'non-homebrew' },
+  thirdParty: { grey: '', blue: 'third-party', red: 'non-third-party' },
+  spellcaster: { grey: '', blue: 'spellcaster', red: 'non-spellcaster' },
+  ritual: { grey: '', blue: 'ritual', red: 'non-ritual' },
+  concentration: { grey: '', blue: 'concentration', red: 'non-concentration' }
+}
+
+// State styles for three-state buttons
+const threeStateStyles = {
+  grey: { background: '#5C5C5C', color: '#1E231A', border: '1px solid #2E2F2D' },
+  blue: { background: '#4587A2', color: '#e0d5c5', border: '1px solid #4587A2' },
+  red: { background: '#5C1A1A', color: '#E85D75', border: '1px solid #E85D75' }
+}
+
+// Toggle function - cycles through grey → blue → red → grey
+function toggleMonsterFilter(filterKey) {
+  const current = monsterFilters[filterKey] || ''
+  const map = threeStateMap[filterKey]
+  let nextState = 'blue'
+  if (current === map.grey) nextState = 'blue'
+  else if (current === map.blue) nextState = 'red'
+  else if (current === map.red) nextState = 'grey'
+
+  monsterFilters[filterKey] = map[nextState]
+  applyMonsterFilters()
+
+  // Update button visual state directly
+  const btn = document.getElementById(`filter-btn-${filterKey}`)
+  if (btn) {
+    const style = threeStateStyles[nextState]
+    btn.style.background = style.background
+    btn.style.color = style.color
+    btn.style.border = style.border
+  }
+}
+// Expose to window for onclick handlers
+window.toggleMonsterFilter = toggleMonsterFilter
+
+// Toggle function for spell filters - same pattern as monster filters
+function toggleSpellFilter(filterKey) {
+  const current = spellFilters[filterKey] || ''
+  const map = threeStateMap[filterKey]
+  let nextState = 'blue'
+  if (current === map.grey) nextState = 'blue'
+  else if (current === map.blue) nextState = 'red'
+  else if (current === map.red) nextState = 'grey'
+
+  spellFilters[filterKey] = map[nextState]
+  applySpellFilters()
+
+  // Update button visual state directly
+  const btn = document.getElementById(`filter-btn-${filterKey}`)
+  if (btn) {
+    const style = threeStateStyles[nextState]
+    btn.style.background = style.background
+    btn.style.color = style.color
+    btn.style.border = style.border
+  }
+}
+// Expose to window for onclick handlers
+window.toggleSpellFilter = toggleSpellFilter
+
+function threeStateToggle(filterKey, label, filterSource = 'monster') {
+  const currentValue = filterSource === 'monster'
+    ? (monsterFilters[filterKey] || '')
+    : (spellFilters[filterKey] || '')
+
+  // Determine current state based on filter value
+  let state = 'grey' // default/all
+  if (currentValue === filterKey || currentValue === 'third-party' || currentValue === 'spellcaster' || currentValue === 'ritual' || currentValue === 'concentration') {
+    state = 'blue' // only
+  } else if (currentValue.startsWith('non-')) {
+    state = 'red' // exclude
+  }
+
+  // Get style for current state
+  const style = threeStateStyles[state]
+  const styleString = `background:${style.background};color:${style.color};border:${style.border}`
+
+  const toggleFn = filterSource === 'monster' ? 'toggleMonsterFilter' : 'toggleSpellFilter'
+
+  return `<button id="filter-btn-${filterKey}" onclick="${toggleFn}('${filterKey}')"
+    style="${styleString};padding:6px 12px;border-radius:4px;font-family:var(--app-font);
+           font-size:11px;font-weight:bold;cursor:pointer;white-space:nowrap;transition:all 0.15s;">
+    ${label}
+  </button>`
+}
+
 // ── State ─────────────────────────────────────────────────────────
 let compendiumData = {
   monsters: [],
@@ -19,6 +139,7 @@ let enc = {
   addOpen: false,
   notesOpen: false,
   monsterQ: '',
+  filteredMonsters: [],
 }
 
 const SKILL_NAMES = {
@@ -27,6 +148,112 @@ const SKILL_NAMES = {
   9: 'Animal Handling', 10: 'Insight', 11: 'Medicine', 12: 'Perception',
   13: 'Survival', 14: 'Deception', 15: 'Intimidation', 16: 'Performance', 17: 'Persuasion'
 }
+
+// ── Shared Confirmation Modal ────────────────────────────────────────
+function confirmDelete(message, onConfirm) {
+  // Remove any existing confirmation modal
+  const existing = document.getElementById('confirm-delete-modal')
+  if (existing) existing.remove()
+
+  // Create modal
+  const modal = document.createElement('div')
+  modal.id = 'confirm-delete-modal'
+  modal.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+  `
+
+  modal.innerHTML = `
+    <div id="confirm-delete-dialog" style="
+      background: #262F35;
+      border: 2px solid #4a9a9a;
+      border-radius: 8px;
+      padding: 24px;
+      min-width: 300px;
+      max-width: 400px;
+      text-align: center;
+      font-family: var(--app-font);
+    ">
+      <div style="font-size: 16px; color: #e0d5c5; margin-bottom: 20px;">
+        ${message}
+      </div>
+      <div style="display: flex; gap: 12px; justify-content: center;">
+        <button id="confirm-delete-yes" style="
+          background: #8b0000;
+          color: #e0d5c5;
+          border: none;
+          padding: 8px 24px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-family: var(--app-font);
+          font-size: 14px;
+          font-weight: 600;
+        ">Yes</button>
+        <button id="confirm-delete-cancel" style="
+          background: #3E3E3D;
+          color: #e0d5c5;
+          border: 2px solid #2E2F2D;
+          padding: 8px 24px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-family: var(--app-font);
+          font-size: 14px;
+          font-weight: 600;
+        ">Cancel</button>
+      </div>
+    </div>
+  `
+
+  function closeModal() {
+    modal.remove()
+  }
+
+  function handleYes() {
+    closeModal()
+    onConfirm()
+  }
+
+  // Event listeners
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeModal()
+  })
+
+  // Escape key closes modal
+  function handleEscape(e) {
+    if (e.key === 'Escape') {
+      closeModal()
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }
+  document.addEventListener('keydown', handleEscape)
+
+  // Add to DOM
+  document.body.appendChild(modal)
+
+  // Attach button event listeners AFTER modal is in DOM
+  document.getElementById('confirm-delete-yes').addEventListener('click', handleYes)
+  document.getElementById('confirm-delete-cancel').addEventListener('click', closeModal)
+}
+window.confirmDelete = confirmDelete
+
+// Render Discord-style markdown formatting
+function renderMarkdown(text) {
+  if (!text) return ''
+  return text
+    .replace(/\*\*\*\*(.+?)\*\*\*\*/g, '<u>$1</u>')           // ****underline****
+    .replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>') // ***bold+italic***
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')           // **bold**
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')                       // *italic*
+}
+window.renderMarkdown = renderMarkdown
 
 // 5e 2024 XP Budget per character (level -> {low, moderate, high})
 const XP_BUDGET_2024 = {
@@ -68,26 +295,19 @@ let currentScreen = { screen: 'home', uid: null }
 
 function pushNav(screen, uid = null) {
   // Push CURRENT state before navigating to new screen
-  console.log('[pushNav] pushing CURRENT state:', currentScreen, 'before navigating to:', screen, uid)
   navHistory.push({ ...currentScreen })
-  console.log('[pushNav] history length after:', navHistory.length)
 
   // Update current screen to the new screen
   currentScreen = { screen, uid }
-  console.log('[pushNav] currentScreen now:', currentScreen)
 }
 
 function popNav() {
-  console.log('popNav called, history length:', navHistory.length, 'last state:', navHistory[navHistory.length-1])
-  console.log('[popNav] called, history length:', navHistory.length)
   if (navHistory.length === 0) {
-    console.log('[popNav] history empty, showing home')
     showSection('home', true)
     return
   }
 
   const prevState = navHistory.pop()
-  console.log('[popNav] restoring state:', prevState)
 
   // Restore the previous screen without pushing to history again
   switch (prevState.screen) {
@@ -155,10 +375,20 @@ window.showAddEncounterToAdventure = showAddEncounterToAdventure
 window.addEncounterToAdventure = addEncounterToAdventure
 window.runEncounter = runEncounter
 window.showMonsterChoice = showMonsterChoice
+window.showMonsterChoiceByIndex = showMonsterChoiceByIndex
+window.addMonsterAsIsByIndex = addMonsterAsIsByIndex
+window.modifyMonsterByIndex = modifyMonsterByIndex
 window.addMonsterAsIs = addMonsterAsIs
 window.modifyMonster = modifyMonster
+window.filterEncMonsters = filterEncMonsters
+window.startCombat = startCombat
+window.nextTurn = nextTurn
+window.endCombat = endCombat
+window.addFromPC = addFromPC
+window.addFromNPC = addFromNPC
 window.openSettings = openSettings
 window.setAppFont = setAppFont
+window.toggleDieLabels = toggleDieLabels
 window.exportCompendium = exportCompendium
 window.exportActiveCampaign = exportActiveCampaign
 window.exportFullBackup = exportFullBackup
@@ -170,6 +400,12 @@ window.showRenameCampaignForm = showRenameCampaignForm
 window.confirmRenameCampaign = confirmRenameCampaign
 window.cancelRenameCampaign = cancelRenameCampaign
 window.switchCampaign = switchCampaign
+window.applyMonsterFilters = applyMonsterFilters
+window.clearMonsterFilters = clearMonsterFilters
+window.applySpellFilters = applySpellFilters
+window.clearSpellFilters = clearSpellFilters
+window.parseDamageString = parseDamageString
+window.parseAttackFromText = parseAttackFromText
 
 // Export currentScreen as getter/setter so it stays in sync
 Object.defineProperty(window, 'currentScreen', {
@@ -183,17 +419,229 @@ function getText(node, tag) {
   return el ? el.textContent.trim() : ''
 }
 
+// Parse damage string into structured fields
+// Moved from monster-builder.js to ensure availability during XML import
+function parseDamageString(dmgStr) {
+  if (!dmgStr || typeof dmgStr !== 'string') {
+    return { diceCount: '', dieType: 'd6', dmgBonus: '', dmgType: '', additionalDiceCount: '', additionalDieType: '', additionalDmgType: '' }
+  }
+
+  dmgStr = dmgStr.trim()
+
+  // Match: XdY + optional numeric bonus + optional additional dice + optional damage type text
+  // Examples: "2d10+8 slashing", "1d6", "2d6+3 piercing", "2d10+8+2d8 fire", "1d6 + 2" (with spaces)
+  const diceMatch = dmgStr.match(/^(\d+)d(\d+)\s*([\+\-]\s*\d+)?\s*([\+\-]\s*(\d+)d(\d+))?\s*(.*)/)
+
+  if (diceMatch) {
+    const diceCount = diceMatch[1]
+    const dieType = 'd' + diceMatch[2]
+    const numericBonus = diceMatch[3] ? diceMatch[3].replace(/\s+/g, '') : '' // Remove spaces from "+2" or "+ 2"
+    const additionalDiceFull = diceMatch[4] || '' // e.g., "+2d8" or "+ 2d8"
+    const additionalDiceCount = diceMatch[5] || '' // e.g., "2"
+    const additionalDieSize = diceMatch[6] || '' // e.g., "8"
+    const remainingText = diceMatch[7] ? diceMatch[7].trim() : ''
+
+    // Extract damage type from remaining text - only word characters, skip any leading numbers/operators
+    // Pattern: "1d4 + 2 Slashing" → remainingText="Slashing" → dmgType="Slashing"
+    // Pattern: "2d6+3 piercing damage" → remainingText="piercing damage" → dmgType="piercing"
+    let damageTypeText = ''
+    const typeMatch = remainingText.match(/\b([a-zA-Z][a-zA-Z]*)\b/)
+    if (typeMatch) {
+      damageTypeText = typeMatch[1].toLowerCase()
+    }
+
+    // Build result
+    const result = {
+      diceCount,
+      dieType,
+      dmgBonus: numericBonus,
+      dmgType: damageTypeText,
+      additionalDiceCount: '',
+      additionalDieType: '',
+      additionalDmgType: ''
+    }
+
+    // If additional dice exists, parse it
+    if (additionalDiceCount && additionalDieSize) {
+      result.additionalDiceCount = additionalDiceCount
+      result.additionalDieType = 'd' + additionalDieSize
+      result.additionalDmgType = damageTypeText // Same damage type applies to both
+    }
+
+    return result
+  }
+
+  // Check for flat damage (just a number + optional damage type)
+  const flatMatch = dmgStr.match(/^(\d+)\s*(.*)/)
+  if (flatMatch) {
+    return {
+      diceCount: '',
+      dieType: 'd6',
+      dmgBonus: flatMatch[1],
+      dmgType: flatMatch[2].trim(),
+      additionalDiceCount: '',
+      additionalDieType: '',
+      additionalDmgType: ''
+    }
+  }
+
+  // Fallback
+  return {
+    diceCount: '',
+    dieType: 'd6',
+    dmgBonus: '',
+    dmgType: dmgStr,
+    additionalDiceCount: '',
+    additionalDieType: '',
+    additionalDmgType: ''
+  }
+}
+
+function parseAttackFromText(text) {
+  if (!text || typeof text !== 'string') return null
+
+  const result = {
+    atk: null,
+    diceCount: null,
+    dieType: null,
+    dmgBonus: null,
+    dmgType: null,
+    altDiceCount: null,
+    altDieType: null,
+    altDmgBonus: null,
+    altDmgType: null
+  }
+
+  // Pattern 1: Attack bonus - "+4 to hit" or "-2 to hit"
+  const atkMatch = text.match(/([\+\-]\d+)\s+to\s+hit/i)
+  if (atkMatch) {
+    result.atk = atkMatch[1]
+  }
+
+  // Pattern 2: Damage dice in parentheses - "Hit: 5 (1d6 + 2) slashing damage"
+  const dmgMatch = text.match(/\((\d+d\d+(?:\s*[\+\-]\s*\d+)?)\)/)
+  if (dmgMatch) {
+    const diceExpr = dmgMatch[1]
+    const parsed = parseDamageString(diceExpr)
+    result.diceCount = parsed.diceCount
+    result.dieType = parsed.dieType
+    result.dmgBonus = parsed.dmgBonus
+    result.dmgType = parsed.dmgType
+  }
+
+  // Pattern 3: Damage type - extract from "X damage" after the dice
+  if (!result.dmgType && dmgMatch) {
+    const afterDice = text.substring(text.indexOf(dmgMatch[0]) + dmgMatch[0].length)
+    const typeMatch = afterDice.match(/^\s*(\w+)\s+damage/i)
+    if (typeMatch) {
+      result.dmgType = typeMatch[1].toLowerCase()
+    }
+  }
+
+  // Pattern 4: Alternate damage - ", or X (YdZ + W) Type damage if [condition]"
+  // Example: ", or 9 (3d4 + 2) Slashing damage if the aarakocra moved"
+  const altMatch = text.match(/,\s*or\s+\d+\s*\((\d+d\d+(?:\s*[\+\-]\s*\d+)?)\)\s*(\w+)?\s*damage/i)
+  if (altMatch) {
+    const altDiceExpr = altMatch[1]
+    const altParsed = parseDamageString(altDiceExpr)
+    result.altDiceCount = altParsed.diceCount
+    result.altDieType = altParsed.dieType
+    result.altDmgBonus = altParsed.dmgBonus
+    // Use damage type from regex capture if present, otherwise use same as primary
+    result.altDmgType = altMatch[2] ? altMatch[2].toLowerCase() : result.dmgType
+  }
+
+  // Return null if we didn't find any attack data
+  if (!result.atk && !result.diceCount) {
+    return null
+  }
+
+  return result
+}
+
 function getBlocks(node, tag) {
   return Array.from(node.querySelectorAll(tag)).map(el => {
     const nameEl = el.querySelector('name')
     const texts = Array.from(el.querySelectorAll('text')).map(t => t.textContent.trim()).join('\n')
-    return {
+
+    const block = {
       name: nameEl ? nameEl.textContent.trim() : (el.getAttribute('name') || ''),
       text: texts || el.textContent.trim(),
       charges: el.querySelector('charges') ? parseInt(el.querySelector('charges').textContent) : null,
       chargesCurrent: el.querySelector('chargesCurrent') ? parseInt(el.querySelector('chargesCurrent').textContent) : null,
       recharge: el.querySelector('recharge') ? parseInt(el.querySelector('recharge').textContent) : null,
     }
+
+    // Parse attack data from XML <attack> element (format: Name|Bonus|Damage)
+    const attackEl = el.querySelector('attack')
+    if (attackEl) {
+      const parts = attackEl.textContent.trim().split('|')
+      const atkBonus = parts[1] ? parts[1].trim() : '0'
+      const dmgString = parts[2] ? parts[2].trim() : ''
+
+      // Parse damage string using parseDamageString (defined above in renderer.js)
+      if (dmgString) {
+        const parsed = parseDamageString(dmgString)
+
+        block.attack = {
+          atk: atkBonus,
+          diceCount: parsed.diceCount,
+          dieType: parsed.dieType,
+          dmgBonus: parsed.dmgBonus,
+          dmgType: parsed.dmgType || '',
+          additionalDiceCount: parsed.additionalDiceCount || '',
+          additionalDieType: parsed.additionalDieType || '',
+          additionalDmgType: parsed.additionalDmgType || '',
+          dmg: dmgString  // keep raw string for backward compat
+        }
+
+        // If dmgType is empty, try to extract from action text
+        // Pattern: "Hit: 17 (2d10+6) piercing damage" or "Hit: 17 (2d10+6) piercing damage plus 4 (1d8) acid damage"
+        if (!block.attack.dmgType && block.text) {
+          const damagePattern = /Hit:.*?\(.*?\)\s*(\w+)\s*damage(?:.*?plus.*?\(.*?\)\s*(\w+)\s*damage)?/i
+          const match = block.text.match(damagePattern)
+          if (match) {
+            block.attack.dmgType = match[1] || ''  // Primary damage type
+            if (match[2] && block.attack.additionalDiceCount) {
+              block.attack.additionalDmgType = match[2]  // Additional damage type
+            }
+          }
+        }
+
+        // Check for alternate damage pattern: ", or X (YdZ + W) Type damage if [condition]"
+        if (block.text) {
+          const altMatch = block.text.match(/,\s*or\s+\d+\s*\((\d+d\d+(?:\s*[\+\-]\s*\d+)?)\)\s*(\w+)?\s*damage/i)
+          if (altMatch) {
+            const altDiceExpr = altMatch[1]
+            const altParsed = parseDamageString(altDiceExpr)
+            block.attack.altDiceCount = altParsed.diceCount
+            block.attack.altDieType = altParsed.dieType
+            block.attack.altDmgBonus = altParsed.dmgBonus
+            // Use damage type from regex capture if present, otherwise use same as primary
+            block.attack.altDmgType = altMatch[2] ? altMatch[2].toLowerCase() : block.attack.dmgType
+            block.attack.showAlternate = true
+
+            // FIX: Prevent double-counting - if additional damage matches alternate damage, clear additional
+            // This happens when parseDamageString() extracts "or 3d4" as additional dice
+            if (block.attack.altDiceCount === block.attack.additionalDiceCount &&
+                block.attack.altDieType === block.attack.additionalDieType) {
+              block.attack.additionalDiceCount = ''
+              block.attack.additionalDieType = ''
+              block.attack.additionalDmgType = ''
+              block.attack.showAdditional = false
+            }
+          }
+        }
+      } else {
+        // Attack with no damage (e.g., save-based abilities)
+        block.attack = {
+          atk: atkBonus,
+          dmg: ''
+        }
+      }
+    }
+
+    return block
   })
 }
 
@@ -234,10 +682,58 @@ function abilityBox(label, score) {
 
 // ── Compendium Parser ─────────────────────────────────────────────
 function parseMonsterNode(m) {
+  // Parse type and extract subtype/tag
+  const rawType = getText(m, 'type')
+  let baseType = rawType
+  let subtypeTag = ''
+
+  // Check if type has subtype - handle both "(subtype)" and "(subtype" (missing closing paren)
+  if (rawType.includes('(')) {
+    const parts = rawType.split('(')
+    baseType = parts[0].trim()
+    // Everything after "(" - strip any trailing ")" if present
+    subtypeTag = parts[1] ? parts[1].replace(/\)\s*$/, '').trim() : ''
+  }
+
+  // Title-case the base type unless it's garbage data (single char, special codes)
+  function titleCase(str) {
+    // Don't title-case if it's a single character, "$", or other garbage
+    if (!str || str.length <= 1 || str === '$' || /^[A-Z]{1,3}$/.test(str)) {
+      return str
+    }
+    // Don't title-case special keywords
+    if (str.toLowerCase() === 'varies') {
+      return str.toLowerCase()
+    }
+
+    // Words to keep lowercase (unless first word)
+    const lowercase = ['of', 'the', 'a', 'an', 'in', 'from', 'with', 'and', 'or', 'but', 'for', 'to', 'at', 'by', 'on']
+
+    // Title-case: first letter of each word uppercase, except articles/prepositions
+    return str.split(' ').map((word, index) => {
+      if (!word) return word
+      const lower = word.toLowerCase()
+      // First word is always capitalized
+      if (index === 0) {
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      }
+      // Keep articles/prepositions lowercase
+      if (lowercase.includes(lower)) {
+        return lower
+      }
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+    }).join(' ')
+  }
+
+  const normalizedType = titleCase(baseType)
+  // Only set tag if subtypeTag is non-empty
+  const normalizedTag = subtypeTag ? titleCase(subtypeTag) : undefined
+
   return {
     name: getText(m, 'name'),
     size: getText(m, 'size'),
-    type: getText(m, 'type'),
+    type: normalizedType,
+    tag: normalizedTag,  // Will be undefined if no subtype
     alignment: getText(m, 'alignment'),
     ac: getText(m, 'ac'),
     hp: getText(m, 'hp'),
@@ -248,8 +744,8 @@ function parseMonsterNode(m) {
     int: getText(m, 'int'),
     wis: getText(m, 'wis'),
     cha: getText(m, 'cha'),
-    save: getText(m, 'save'),
-    skill: getText(m, 'skill'),
+    save: Array.from(m.querySelectorAll('save')).map(el => el.textContent.trim()).filter(Boolean).join(', '),
+    skill: Array.from(m.querySelectorAll('skill')).map(el => el.textContent.trim()).filter(Boolean).join(', '),
     immune: getText(m, 'immune'),
     resist: getText(m, 'resist'),
     vulnerable: getText(m, 'vulnerable'),
@@ -270,27 +766,125 @@ function parseMonsterNode(m) {
 }
 
 function parseSpellNode(s) {
+  const ritualText = getText(s, 'ritual')
+  const schoolNum = getText(s, 'school')
+  const spellName = getText(s, 'name')
+
+  // Map school numbers AND letter codes to full names
+  const schoolNames = {
+    '0': 'None',
+    '1': 'Abjuration', 'A': 'Abjuration',
+    '2': 'Conjuration', 'C': 'Conjuration',
+    '3': 'Divination', 'D': 'Divination',
+    '4': 'Enchantment', 'EN': 'Enchantment',
+    '5': 'Evocation', 'EV': 'Evocation',
+    '6': 'Illusion', 'I': 'Illusion',
+    '7': 'Necromancy', 'N': 'Necromancy',
+    '8': 'Transmutation', 'T': 'Transmutation'
+  }
+
+  // Handle TWO different XML formats for components:
+  // FORMAT A (Fight Club 5e): <v>1</v>, <s>1</s>, <m>1</m>, <materials>text</materials>
+  // FORMAT B (GM5/other): <components>V, S, M (text)</components>
+
+  let verbal, somatic, material, materials, components
+
+  const vTag = getText(s, 'v')
+  if (vTag) {
+    // FORMAT A: Separate component tags
+    verbal = vTag === '1'
+    somatic = getText(s, 's') === '1'
+    material = getText(s, 'm') === '1'
+    materials = getText(s, 'materials')
+
+    // Build formatted components string
+    const compParts = []
+    if (verbal) compParts.push('V')
+    if (somatic) compParts.push('S')
+    if (material) {
+      if (materials) {
+        compParts.push(`M (${materials})`)
+      } else {
+        compParts.push('M')
+      }
+    }
+    components = compParts.join(', ')
+  } else {
+    // FORMAT B: Single components string
+    components = getText(s, 'components') || ''
+    verbal = components.includes('V')
+    somatic = components.includes('S')
+    material = components.includes('M')
+
+    // Extract materials text from parentheses
+    materials = ''
+    if (material) {
+      const match = components.match(/M \(([^)]+)\)/)
+      if (match) {
+        materials = match[1]
+      }
+    }
+  }
+
+  // Handle TWO different XML formats for classes:
+  // FORMAT A (Fight Club 5e): <sclass>Sorcerer</sclass>, <sclass>Wizard</sclass>
+  // FORMAT B (GM5/other): <classes>Sorcerer, Wizard</classes>
+
+  let classes
+  const sclassTags = Array.from(s.querySelectorAll('sclass'))
+  if (sclassTags.length > 0) {
+    // FORMAT A: Multiple sclass tags
+    classes = sclassTags.map(el => el.textContent.trim()).join(', ')
+  } else {
+    // FORMAT B: Single classes string
+    classes = getText(s, 'classes') || ''
+  }
+
+  // Normalize level: cantrips may have empty/missing <level> tag, store as '0'
+  const rawLevel = getText(s, 'level')
+  const level = (!rawLevel || rawLevel === '') ? '0' : rawLevel
+
+  // Parse concentration from duration field
+  const duration = getText(s, 'duration')
+  const concentration = duration?.toLowerCase().includes('concentration') || false
+
   return {
-    name: getText(s, 'name'),
-    level: getText(s, 'level'),
-    school: getText(s, 'school'),
+    name: spellName,
+    level: level,
+    school: schoolNames[schoolNum] || schoolNum,
+    ritual: ritualText === '1' || ritualText.toUpperCase() === 'YES',
     time: getText(s, 'time'),
     range: getText(s, 'range'),
-    components: getText(s, 'components'),
-    duration: getText(s, 'duration'),
-    classes: getText(s, 'classes'),
+    components: components,
+    verbal: verbal,
+    somatic: somatic,
+    material: material,
+    materials: materials,
+    duration: duration,
+    concentration: concentration,
+    classes: classes,
     text: Array.from(s.querySelectorAll('text')).map(t => t.textContent.trim()).join('\n'),
     roll: getText(s, 'roll'),
   }
 }
 
 function parseCompendium(xml) {
-  compendiumData.monsters = Array.from(xml.querySelectorAll('monster'))
+  // Preserve existing custom entries
+  const existingCustomMonsters = compendiumData.monsters.filter(m => m._custom)
+  const existingCustomSpells = compendiumData.spells.filter(s => s._custom)
+
+  // Parse XML entries (these will NOT have _custom flag)
+  const xmlMonsters = Array.from(xml.querySelectorAll('monster'))
     .map(m => parseMonsterNode(m))
+
+  const xmlSpells = Array.from(xml.querySelectorAll('spell'))
+    .map(s => parseSpellNode(s))
+
+  // Merge: XML entries + custom entries
+  compendiumData.monsters = [...xmlMonsters, ...existingCustomMonsters]
     .sort((a, b) => a.name.localeCompare(b.name))
 
-  compendiumData.spells = Array.from(xml.querySelectorAll('spell'))
-    .map(s => parseSpellNode(s))
+  compendiumData.spells = [...xmlSpells, ...existingCustomSpells]
     .sort((a, b) => a.name.localeCompare(b.name))
 }
 
@@ -314,13 +908,6 @@ function parseCampaign(xml) {
     const level = !isNPC ? cr : null
     const classInfo = !isNPC ? name : null
 
-    // Debug: log all available child tags for first PC
-    if (!isNPC && node.tagName === 'pc') {
-      const allTags = Array.from(node.children).map(child => child.tagName).join(', ')
-      console.log(`[parseCampaign] PC XML tags available: ${allTags}`)
-    }
-
-    console.log(`[parseCampaign] <${node.tagName}> label="${label}" name="${name}" cr="${cr}" level="${level}" classInfo="${classInfo}" enemy="${enemy}" isNPC=${isNPC}`)
 
     // Parse size - can be numeric (0-5) or letter abbreviation
     // GM5E format: 0=Tiny, 1=Small, 2=Medium, 3=Large, 4=Huge, 5=Gargantuan
@@ -403,7 +990,6 @@ function parseCampaign(xml) {
 
   compendiumData.players = players
   compendiumData.npcs    = npcs
-  console.log(`[parseCampaign] ${compendiumData.players.length} players, ${compendiumData.npcs.length} NPCs`)
 }
 
 // ── Import ────────────────────────────────────────────────────────
@@ -496,11 +1082,16 @@ function addToCompendium() {
           tempData.monsters.forEach(newMonster => {
             const existingIndex = compendiumData.monsters.findIndex(m => m.name === newMonster.name)
             if (existingIndex >= 0) {
-              if (replaceExisting) {
+              const existingMonster = compendiumData.monsters[existingIndex]
+              if (existingMonster._custom) {
+                // Never overwrite custom monsters — add XML version alongside it
+                compendiumData.monsters.push(newMonster)
+                addedMonsters++
+              } else if (replaceExisting) {
                 compendiumData.monsters[existingIndex] = newMonster
                 replacedMonsters++
               }
-              // else keep existing, do nothing
+              // If not replaceExisting and not custom, skip (keep existing)
             } else {
               compendiumData.monsters.push(newMonster)
               addedMonsters++
@@ -511,11 +1102,16 @@ function addToCompendium() {
           tempData.spells.forEach(newSpell => {
             const existingIndex = compendiumData.spells.findIndex(s => s.name === newSpell.name)
             if (existingIndex >= 0) {
-              if (replaceExisting) {
+              const existingSpell = compendiumData.spells[existingIndex]
+              if (existingSpell._custom) {
+                // Never overwrite custom spells — add XML version alongside it
+                compendiumData.spells.push(newSpell)
+                addedSpells++
+              } else if (replaceExisting) {
                 compendiumData.spells[existingIndex] = newSpell
                 replacedSpells++
               }
-              // else keep existing, do nothing
+              // If not replaceExisting and not custom, skip (keep existing)
             } else {
               compendiumData.spells.push(newSpell)
               addedSpells++
@@ -608,6 +1204,7 @@ function importCampaignXML() {
         const campaignName = firstChar?.campaignName || file.name.replace('.xml', '')
         if (!compendiumData.campaigns) compendiumData.campaigns = {}
         compendiumData.campaigns[campaignName] = {
+          ...compendiumData.campaigns[campaignName],  // preserve ALL existing fields
           players: compendiumData.players,
           npcs: compendiumData.npcs,
           adventures: compendiumData.campaigns[campaignName]?.adventures || []
@@ -690,6 +1287,55 @@ function initIgnaciousEyeTracking() {
   updateEyePosition()
 }
 
+// ── Ignacious Blink Animation ─────────────────────────────────────
+let isBlinking = false
+
+const iggyPhrases = [
+  "Cease this provocation.",
+  "I said cease!",
+  "Is there not another means of entertainment available?",
+  "You leave me deeply disappointed...",
+  "Surely that must be the final jab...?",
+  "OW!"
+]
+let iggyPhraseIndex = 0
+
+function iggyBlink() {
+  if (isBlinking) return // Prevent re-triggering during animation
+
+  const portrait = document.getElementById('iggy-portrait')
+  if (!portrait) return
+
+  isBlinking = true
+  const originalSrc = portrait.src
+
+  // Show phrase in speech bubble
+  showToast(iggyPhrases[iggyPhraseIndex])
+  iggyPhraseIndex = (iggyPhraseIndex + 1) % iggyPhrases.length
+
+  // Step 1: Squint for 1/8 second
+  portrait.src = 'assets/Ignacious_Squint.png'
+
+  setTimeout(() => {
+    // Step 2: Blink for 1/4 second
+    portrait.src = 'assets/Ignacious_Blink.png'
+
+    setTimeout(() => {
+      // Step 3: Squint for 3/4 second
+      portrait.src = 'assets/Ignacious_Squint.png'
+
+      setTimeout(() => {
+        // Step 4: Return to original
+        portrait.src = originalSrc
+        isBlinking = false
+      }, 750)
+    }, 250)
+  }, 125)
+}
+
+// Expose to window for onclick handler
+window.iggyBlink = iggyBlink
+
 function reimportCampaignXML() {
   if (!compendiumData.activeCampaign) {
     showToast('No active campaign to re-import')
@@ -713,6 +1359,7 @@ function reimportCampaignXML() {
         parseCampaign(xml)
         const campaignName = compendiumData.activeCampaign
         compendiumData.campaigns[campaignName] = {
+          ...compendiumData.campaigns[campaignName],  // preserve ALL existing fields
           players: compendiumData.players,
           npcs: compendiumData.npcs
         }
@@ -730,12 +1377,38 @@ function reimportCampaignXML() {
 }
 
 // ── Settings Modal ────────────────────────────────────────────────
+// Collapsible section state
+let importExpanded = false
+let exportExpanded = false
+
+function toggleImportSection() {
+  importExpanded = !importExpanded
+  const arrow = document.getElementById('import-arrow')
+  const options = document.getElementById('settings-import-options')
+  if (arrow) arrow.textContent = importExpanded ? '▼' : '▶'
+  if (options) options.style.display = importExpanded ? 'block' : 'none'
+}
+window.toggleImportSection = toggleImportSection
+
+function toggleExportSection() {
+  exportExpanded = !exportExpanded
+  const arrow = document.getElementById('export-arrow')
+  const options = document.getElementById('settings-export-options')
+  if (arrow) arrow.textContent = exportExpanded ? '▼' : '▶'
+  if (options) options.style.display = exportExpanded ? 'block' : 'none'
+}
+window.toggleExportSection = toggleExportSection
+
 function openSettings() {
   const existing = document.getElementById('settings-modal')
   if (existing) {
     existing.remove()
     return
   }
+
+  // Reset expanded state when modal opens
+  importExpanded = false
+  exportExpanded = false
 
   const modal = document.createElement('div')
   modal.id = 'settings-modal'
@@ -751,100 +1424,188 @@ function openSettings() {
     border-radius:4px;transition:background .15s,border-color .15s;
   `
 
+  const subBtnStyle = `
+    display:block;width:calc(100% - 20px);background:#262F35;border:1px solid #2a3a5a;
+    color:#e0d5c5;padding:8px 14px;margin-bottom:6px;margin-left:20px;cursor:pointer;
+    font-size:12px;text-align:left;font-family:var(--app-font);
+    border-radius:4px;transition:background .15s,border-color .15s;box-sizing:border-box;
+  `
+
+  const headerStyle = `
+    display:flex;align-items:center;width:100%;background:#262F35;
+    border:1px solid #2a3a5a;color:#e0d5c5;padding:10px 16px;
+    margin-bottom:8px;cursor:pointer;font-size:14px;font-weight:700;
+    text-align:left;font-family:var(--app-font);border-radius:4px;
+    transition:background .15s,border-color .15s;letter-spacing:.1em;
+  `
+
   modal.innerHTML = `
+    <style>
+      #settings-scroll-container::-webkit-scrollbar {
+        display: none;
+      }
+    </style>
     <div style="background:#0a1520;border:2px solid #4a9a9a;border-radius:8px;
                 padding:24px;max-width:500px;width:90%;font-family:var(--app-font);
-                position:relative;">
+                position:relative;max-height:85vh;display:flex;flex-direction:column;">
       <button onclick="document.getElementById('settings-modal').remove()"
         style="position:absolute;top:12px;right:12px;background:none;border:none;
-               color:#555;cursor:pointer;font-size:24px;line-height:1;padding:4px 8px;"
+               color:#555;cursor:pointer;font-size:24px;line-height:1;padding:4px 8px;z-index:1;"
         onmouseover="this.style.color='#e0d5c5'"
         onmouseout="this.style.color='#555'">×</button>
 
-      <h2 style="font-size:20px;color:#e0d5c5;margin:0 0 20px 0;">Settings</h2>
+      <h2 style="font-size:20px;color:#e0d5c5;margin:0 0 20px 0;flex-shrink:0;">Settings</h2>
 
-      <div style="margin-bottom:24px;">
-        <div style="font-size:14px;color:#1E231A;letter-spacing:.1em;font-weight:700;margin-bottom:10px;">
-          IMPORT
+      <div id="settings-scroll-container" style="overflow-y:auto;flex:1;scrollbar-width:none;-ms-overflow-style:none;">
+
+
+      <div style="margin-bottom:16px;">
+        <button onclick="toggleImportSection()"
+          style="${headerStyle}"
+          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+          onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+          <span id="import-arrow" style="margin-right:8px;font-size:10px;">▶</span>
+          IMPORT...
+        </button>
+        <div id="settings-import-options" style="display:none;">
+          <button onclick="addToCompendium();document.getElementById('settings-modal').remove()"
+            style="${subBtnStyle}"
+            onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+            Add to Compendium (XML)
+          </button>
+          <button onclick="importXML();document.getElementById('settings-modal').remove()"
+            style="${subBtnStyle}"
+            onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+            Re-import Compendium (XML)
+          </button>
+          <button onclick="importCampaignXML();document.getElementById('settings-modal').remove()"
+            style="${subBtnStyle}"
+            onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+            Import New Campaign (XML)
+          </button>
+          <button onclick="reimportCampaignXML();document.getElementById('settings-modal').remove()"
+            style="${subBtnStyle}"
+            onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+            Re-import Existing Campaign (XML)
+          </button>
+          <button onclick="restoreFromBackup();document.getElementById('settings-modal').remove()"
+            style="${subBtnStyle}"
+            onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+            Restore from Backup (JSON)
+          </button>
         </div>
-        <button onclick="addToCompendium();document.getElementById('settings-modal').remove()"
-          style="${btnStyle}"
+      </div>
+
+      <div style="margin-bottom:16px;">
+        <button onclick="toggleExportSection()"
+          style="${headerStyle}"
           onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Add to Compendium (XML)
+          onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+          <span id="export-arrow" style="margin-right:8px;font-size:10px;">▶</span>
+          EXPORT...
         </button>
-        <button onclick="importXML();document.getElementById('settings-modal').remove()"
-          style="${btnStyle}"
-          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Re-import Compendium (XML)
-        </button>
-        <button onclick="importCampaignXML();document.getElementById('settings-modal').remove()"
-          style="${btnStyle}"
-          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Import New Campaign (XML)
-        </button>
-        <button onclick="reimportCampaignXML();document.getElementById('settings-modal').remove()"
-          style="${btnStyle}"
-          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Re-import Existing Campaign (XML)
-        </button>
-        <button onclick="restoreFromBackup();document.getElementById('settings-modal').remove()"
-          style="${btnStyle}"
-          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Restore from Backup (JSON)
-        </button>
+        <div id="settings-export-options" style="display:none;">
+          <button onclick="exportCompendium();document.getElementById('settings-modal').remove()"
+            style="${subBtnStyle}"
+            onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+            Export Compendium
+          </button>
+          <button onclick="exportActiveCampaign();document.getElementById('settings-modal').remove()"
+            style="${subBtnStyle}"
+            onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+            Export Active Campaign
+          </button>
+          <button onclick="exportFullBackup();document.getElementById('settings-modal').remove()"
+            style="${subBtnStyle}"
+            onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+            Full Backup (JSON)
+          </button>
+        </div>
       </div>
 
       <div style="margin-bottom:24px;">
-        <div style="font-size:14px;color:#1E231A;letter-spacing:.1em;font-weight:700;margin-bottom:10px;">
-          EXPORT
-        </div>
-        <button onclick="exportCompendium();document.getElementById('settings-modal').remove()"
-          style="${btnStyle}"
-          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Export Compendium
-        </button>
-        <button onclick="exportActiveCampaign();document.getElementById('settings-modal').remove()"
-          style="${btnStyle}"
-          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Export Active Campaign
-        </button>
-        <button onclick="exportFullBackup();document.getElementById('settings-modal').remove()"
-          style="${btnStyle}"
-          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Full Backup (JSON)
-        </button>
-      </div>
-
-      <div>
-        <div style="font-size:14px;color:#1E231A;letter-spacing:.1em;font-weight:700;margin-bottom:10px;">
+        <div style="font-size:14px;color:#e0d5c5;letter-spacing:.1em;font-weight:700;margin-bottom:10px;">
           FONT
         </div>
-        <button onclick="setAppFont('Metamorphous')"
-          style="${btnStyle}"
-          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Metamorphous (Default)
-        </button>
-        <button onclick="setAppFont('MedievalSharp')"
-          style="${btnStyle}"
-          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          MedievalSharp
-        </button>
         <button onclick="setAppFont('Cinzel')"
-          style="${btnStyle}"
+          style="${btnStyle}font-family:'Cinzel',Georgia,serif;"
           onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
-          onmouseout="this.style.background='#1e3535';this.style.borderColor='#2a3a5a'">
-          Cinzel
+          onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+          Cinzel (Default)
         </button>
+        <button onclick="setAppFont('Grenze')"
+          style="${btnStyle}font-family:'Grenze',serif;"
+          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+          onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+          Grenze
+        </button>
+        <button onclick="setAppFont('Times New Roman')"
+          style="${btnStyle}font-family:'Times New Roman',Times,serif;"
+          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+          onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+          Times New Roman
+        </button>
+      </div>
+
+      <div style="margin-bottom:24px;">
+        <div style="font-size:14px;color:#e0d5c5;letter-spacing:.1em;font-weight:700;margin-bottom:10px;">
+          DICE ROLLER
+        </div>
+        <div style="padding:10px 16px;background:#262F35;border:1px solid #2a3a5a;border-radius:4px;">
+          ${circleToggle('die-labels-toggle', localStorage.getItem('showDieLabels') === 'true',
+            `toggleDieLabels(!(localStorage.getItem('showDieLabels') === 'true'))`,
+            'Show Die Labels')}
+        </div>
+      </div>
+
+      <div style="margin-bottom:24px;">
+        <div style="font-size:14px;color:#e0d5c5;letter-spacing:.1em;font-weight:700;margin-bottom:10px;">
+          CAMPAIGN
+        </div>
+        <div id="new-campaign-container">
+          <button onclick="showNewCampaignForm()"
+            style="${btnStyle}"
+            onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+            onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+            + New Campaign
+          </button>
+        </div>
+        ${compendiumData.activeCampaign ? `
+          <div id="campaign-selector-container">
+            <button onclick="showRenameCampaignForm()"
+              style="${btnStyle}"
+              onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+              onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+              Rename Current Campaign
+            </button>
+          </div>
+        ` : ''}
+      </div>
+
+      ${compendiumData.activeCampaign ? `
+        <div>
+          <div style="font-size:14px;color:#e0d5c5;letter-spacing:.1em;font-weight:700;margin-bottom:10px;">
+            DANGER ZONE
+          </div>
+          <button onclick="showDeleteCampaignModal()"
+            style="display:block;width:100%;background:#5a0000;border:1px solid #8b0000;
+                   color:#ff6666;padding:10px 16px;margin-bottom:8px;cursor:pointer;
+                   font-size:13px;text-align:left;font-family:var(--app-font);
+                   border-radius:4px;transition:background .15s,border-color .15s;"
+            onmouseover="this.style.background='#8b0000';this.style.borderColor='#ff0000'"
+            onmouseout="this.style.background='#5a0000';this.style.borderColor='#8b0000'">
+            Delete Active Campaign
+          </button>
+        </div>
+      ` : ''}
       </div>
     </div>
   `
@@ -857,16 +1618,29 @@ function openSettings() {
   })
 }
 
+function toggleDieLabels(enabled) {
+  localStorage.setItem('showDieLabels', enabled)
+  renderDiceRoller()
+}
+
 function setAppFont(fontName) {
   const fontMap = {
-    'Metamorphous': "'Metamorphous', Georgia, serif",
-    'MedievalSharp': "'MedievalSharp', Georgia, serif",
-    'Cinzel': "'Cinzel', Georgia, serif"
+    'Cinzel': "'Cinzel', Georgia, serif",
+    'Grenze': "'Grenze', serif",
+    'Times New Roman': "'Times New Roman', Times, serif"
   }
 
   const fontFamily = fontMap[fontName] || fontMap['Cinzel']
   document.documentElement.style.setProperty('--app-font', fontFamily)
   localStorage.setItem('dmCompanionFont', fontName)
+
+  // Toggle font-specific classes
+  document.body.classList.remove('font-grenze', 'font-times')
+  if (fontName === 'Grenze') {
+    document.body.classList.add('font-grenze')
+  } else if (fontName === 'Times New Roman') {
+    document.body.classList.add('font-times')
+  }
 
   const modal = document.getElementById('settings-modal')
   if (modal) modal.remove()
@@ -875,8 +1649,120 @@ function setAppFont(fontName) {
 function loadFontPreference() {
   const savedFont = localStorage.getItem('dmCompanionFont')
   if (savedFont) {
-    setAppFont(savedFont)
+    // Check if saved font is still valid, otherwise reset to Cinzel
+    const validFonts = ['Cinzel', 'Grenze', 'Times New Roman']
+    if (validFonts.includes(savedFont)) {
+      setAppFont(savedFont)
+    } else {
+      // Invalid/removed font in localStorage, reset to default
+      setAppFont('Cinzel')
+    }
   }
+}
+
+function showDeleteCampaignModal() {
+  const campaignName = compendiumData.activeCampaign
+  if (!campaignName) return
+
+  // Close settings modal
+  const settingsModal = document.getElementById('settings-modal')
+  if (settingsModal) settingsModal.remove()
+
+  const modal = document.createElement('div')
+  modal.id = 'delete-campaign-modal'
+  modal.style.cssText = `
+    position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:2500;
+    display:flex;align-items:center;justify-content:center;
+  `
+
+  modal.innerHTML = `
+    <div style="background:#0a1520;border:2px solid #8b0000;border-radius:8px;
+                padding:24px;max-width:500px;width:90%;font-family:var(--app-font);">
+      <h2 style="font-size:20px;color:#ff6666;margin:0 0 16px 0;">⚠️ Delete Campaign</h2>
+
+      <div style="background:#1a0000;border:1px solid #8b0000;border-radius:4px;padding:12px;margin-bottom:16px;">
+        <p style="color:#e0d5c5;margin:0 0 12px 0;font-size:14px;">
+          This will <strong>permanently delete</strong> the campaign "<strong>${campaignName}</strong>" and ALL data within it:
+        </p>
+        <ul style="color:#ff9999;margin:0;padding-left:20px;font-size:13px;">
+          <li>All PCs (${compendiumData.players.length})</li>
+          <li>All NPCs (${compendiumData.npcs.length})</li>
+          <li>All Adventures (${(compendiumData.campaigns[campaignName].adventures || []).length})</li>
+          <li>All Encounters (${Object.keys(enc.list[campaignName] || {}).length})</li>
+          <li>All Campaign Notes</li>
+        </ul>
+      </div>
+
+      <p style="color:#e0d5c5;margin:0 0 12px 0;font-size:14px;">
+        Type the campaign name <strong>"${campaignName}"</strong> to confirm:
+      </p>
+
+      <input type="text" id="delete-campaign-input" placeholder="Campaign name"
+        style="width:100%;box-sizing:border-box;background:#262F35;border:1px solid #8b0000;
+               color:#e0d5c5;padding:10px 12px;border-radius:4px;font-family:var(--app-font);
+               font-size:14px;margin-bottom:16px;"
+        oninput="document.getElementById('delete-campaign-confirm-btn').disabled = (this.value !== '${campaignName}')" />
+
+      <div style="display:flex;gap:12px;justify-content:flex-end;">
+        <button onclick="document.getElementById('delete-campaign-modal').remove()"
+          style="background:#3E3E3D;border:2px solid #2E2F2D;color:#e0d5c5;padding:8px 24px;
+                 cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:14px;">
+          Cancel
+        </button>
+        <button id="delete-campaign-confirm-btn" onclick="confirmDeleteCampaign('${campaignName}')" disabled
+          style="background:#8b0000;border:none;color:#e0d5c5;padding:8px 24px;
+                 cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:14px;
+                 opacity:0.5;"
+          onmouseover="if(!this.disabled)this.style.opacity='1'"
+          onmouseout="if(!this.disabled)this.style.opacity='1';else this.style.opacity='0.5'">
+          Delete Campaign
+        </button>
+      </div>
+    </div>
+  `
+
+  document.body.appendChild(modal)
+
+  // Focus input
+  setTimeout(() => document.getElementById('delete-campaign-input')?.focus(), 50)
+
+  // Close on background click
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) modal.remove()
+  })
+}
+
+function confirmDeleteCampaign(campaignName) {
+  if (!compendiumData.campaigns[campaignName]) return
+
+  // Delete all encounters for this campaign
+  delete enc.list[campaignName]
+
+  // Delete the campaign
+  delete compendiumData.campaigns[campaignName]
+
+  // Clear active campaign
+  compendiumData.activeCampaign = null
+  compendiumData.players = []
+  compendiumData.npcs = []
+
+  // Switch to another campaign if one exists
+  const remainingCampaigns = Object.keys(compendiumData.campaigns)
+  if (remainingCampaigns.length > 0) {
+    switchCampaign(remainingCampaigns[0])
+  }
+
+  // Save changes
+  saveCampaigns(compendiumData.campaigns)
+  saveEncounters(enc.list)
+
+  // Close modal and refresh
+  document.getElementById('delete-campaign-modal')?.remove()
+  showToast(`Campaign "${campaignName}" deleted`)
+
+  // Re-render entire app to update sidebar campaign dropdown
+  render()
+  showSection('home')
 }
 
 // ── Export Functions ──────────────────────────────────────────────
@@ -1121,7 +2007,7 @@ function exportFullBackup() {
   }
 
   const json = JSON.stringify(backup, null, 2)
-  downloadFile(`dm-companion-backup-${timestamp}.json`, json, 'application/json')
+  downloadFile(`farsight-keep-backup-${timestamp}.json`, json, 'application/json')
   showToast('Full backup exported')
 }
 
@@ -1236,71 +2122,98 @@ function render() {
         <img id="ignacious-eye" src="assets/Ignacious_Eye.PNG"
           style="position:absolute;width:100%;height:100%;object-fit:contain;
                  transition:transform .2s ease-out;will-change:transform;" />
-        <img id="ignacious-base" src="assets/Ignacious.PNG"
+        <img id="iggy-portrait" src="assets/Ignacious.png"
           style="position:absolute;width:100%;height:100%;object-fit:contain;" />
+        <!-- Clickable eye area -->
+        <div onclick="iggyBlink()"
+          style="position:absolute;top:84px;left:105px;width:40px;height:40px;
+                 cursor:pointer;pointer-events:auto;z-index:10001;">
+        </div>
       </div>
 
-      <div style="position:relative;flex-shrink:0;height:auto;">
+      <div style="position:relative;flex-shrink:0;height:157px;">
         <img src="assets/Header.png" alt="Header"
           style="position:absolute;top:0;left:0;width:1641px;height:auto;z-index:0;
                  pointer-events:none;display:block;" />
         <div style="display:flex;align-items:center;position:relative;z-index:1;
                     padding:10px 20px 10px 240px;min-height:100%;gap:0;justify-content:space-between;">
           <div style="display:flex;gap:0;">
-            <div style="display:flex;gap:0;">
-              ${sections.map(s => `
-                <div onclick="showSection('${s}')" class="nav-btn" id="nav-${s}"
-                  style="cursor:pointer;pointer-events:auto;clip-path:inset(30px 25px);
-                         display:block;margin:0 -20px 0 0;">
-                  <img src="assets/${tabImages[s]}" alt="${s}"
-                    style="display:block;height:137px;width:auto;object-fit:contain;
-                           pointer-events:none;" />
-                </div>
-              `).join('')}
+            <div onclick="showSection('home')" class="nav-btn" id="nav-home"
+              style="cursor:pointer;pointer-events:auto;
+                     display:block;margin:0 4px 0 0;">
+              <img src="assets/${tabImages.home}" alt="home"
+                style="display:block;height:90px;width:auto;object-fit:contain;
+                       pointer-events:none;" />
+            </div>
+            <div onclick="showSection('characters')" class="nav-btn" id="nav-characters"
+              style="cursor:pointer;pointer-events:auto;
+                     display:block;margin:0 4px 0 0;">
+              <img src="assets/${tabImages.characters}" alt="characters"
+                style="display:block;height:90px;width:auto;object-fit:contain;
+                       pointer-events:none;" />
+            </div>
+            <div onclick="showSection('encounters')" class="nav-btn" id="nav-encounters"
+              style="cursor:pointer;pointer-events:auto;
+                     display:block;margin:0 4px 0 0;">
+              <img src="assets/${tabImages.encounters}" alt="encounters"
+                style="display:block;height:90px;width:auto;object-fit:contain;
+                       pointer-events:none;" />
+            </div>
+            <div onclick="showSection('notes')" class="nav-btn" id="nav-notes"
+              style="cursor:pointer;pointer-events:auto;
+                     display:block;margin:0 4px 0 0;">
+              <img src="assets/${tabImages.notes}" alt="notes"
+                style="display:block;height:90px;width:auto;object-fit:contain;
+                       pointer-events:none;" />
             </div>
           </div>
 
           ${hasCampaigns ? `
-            <div style="display:flex;flex-direction:column;align-items:flex-start;gap:4px;">
-              <div id="campaign-selector-container" style="display:flex;align-items:center;gap:6px;">
-                <select id="campaign-selector" onchange="switchCampaign(this.value)"
-                  style="background:#5C5C5C;border:4px solid #2E2F2D;color:#1E231A;
-                         padding:6px 12px;border-radius:4px;font-size:13px;font-family:var(--app-font);
-                         cursor:pointer;min-width:150px;">
-                  ${campaigns.map(name => `
-                    <option value="${name}" ${name === compendiumData.activeCampaign ? 'selected' : ''}>
-                      ${name}
-                    </option>
-                  `).join('')}
-                </select>
-                <button onclick="showRenameCampaignForm()" title="Rename Campaign"
-                  style="background:none;border:none;color:#909090;cursor:pointer;
-                         font-size:16px;padding:4px;line-height:1;"
-                  onmouseover="this.style.color='#4a9a9a'"
-                  onmouseout="this.style.color='#909090'">
-                  ✎
-                </button>
-              </div>
-              <div id="new-campaign-container">
-                <button onclick="showNewCampaignForm()"
-                  style="background:#1E231A;color:#909090;border:2px solid #445E22;
-                         padding:4px 10px;cursor:pointer;border-radius:4px;font-size:11px;
-                         font-family:var(--app-font);white-space:nowrap;font-weight:700;"
-                  onmouseover="this.style.borderColor='#4a9a9a';this.style.background='#2a3a2a'"
-                  onmouseout="this.style.borderColor='#445E22';this.style.background='#1E231A'">
-                  + New Campaign
-                </button>
-              </div>
+            <div style="display:flex;flex-direction:column;align-items:flex-start;">
+              <label style="font-size:13px;color:#2E2F2D;letter-spacing:0.1em;font-weight:700;
+                            font-family:var(--app-font);display:block;margin-bottom:3px;text-align:center;
+                            width:100%;
+                            text-shadow:0 0 3px #445E22, 0 0 6px #445E22, 0 0 9px #445E22,
+                                        -1px -1px 0 #445E22, 1px -1px 0 #445E22,
+                                        -1px 1px 0 #445E22, 1px 1px 0 #445E22;">
+                CURRENT CAMPAIGN
+              </label>
+              <select id="campaign-selector" onchange="switchCampaign(this.value)"
+                style="background:#5C5C5C;border:4px solid #2E2F2D;color:#1E231A;
+                       padding:6px 12px;border-radius:4px;font-size:13px;font-family:var(--app-font);
+                       cursor:pointer;min-width:150px;">
+                ${campaigns.map(name => `
+                  <option value="${name}" ${name === compendiumData.activeCampaign ? 'selected' : ''}>
+                    ${name}
+                  </option>
+                `).join('')}
+              </select>
             </div>
           ` : ''}
-          <div onclick="openSettings()" id="settings-button" title="Settings"
-            style="cursor:pointer;pointer-events:auto;clip-path:inset(30px 25px);
-                   display:block;margin:0;">
-            <img src="assets/Settings_Tab.png" alt="Settings"
-              style="display:block;height:137px;width:auto;object-fit:contain;
-                     pointer-events:none;" />
+
+          <div style="display:flex;gap:0;">
+            <div onclick="showSection('monsters')" class="nav-btn" id="nav-monsters"
+              style="cursor:pointer;pointer-events:auto;
+                     display:block;margin:0 4px 0 0;">
+              <img src="assets/${tabImages.monsters}" alt="monsters"
+                style="display:block;height:90px;width:auto;object-fit:contain;
+                       pointer-events:none;" />
+            </div>
+            <div onclick="showSection('spells')" class="nav-btn" id="nav-spells"
+              style="cursor:pointer;pointer-events:auto;
+                     display:block;margin:0 4px 0 0;">
+              <img src="assets/${tabImages.spells}" alt="spells"
+                style="display:block;height:90px;width:auto;object-fit:contain;
+                       pointer-events:none;" />
+            </div>
+            <div onclick="openSettings()" id="settings-button" title="Settings"
+              style="cursor:pointer;pointer-events:auto;
+                     display:block;margin:0;">
+              <img src="assets/Settings_Tab.png" alt="Settings"
+                style="display:block;height:90px;width:auto;object-fit:contain;
+                       pointer-events:none;" />
+            </div>
           </div>
-          </button>
         </div>
       </div>
 
@@ -1308,17 +2221,16 @@ function render() {
 
       <div id="ignacious-speech"
         style="position:fixed;top:80px;left:240px;
-               background:#2a2a2a;border:2px solid #4a9a9a;color:#e0d5c5;
+               background:#EEEEEE;border:2px solid #0E1412;color:#0E1412;
                padding:12px 18px;border-radius:12px;font-size:14px;font-family:var(--app-font);
                opacity:0;transition:opacity .3s,transform .3s;pointer-events:none;z-index:10000;
                max-width:350px;box-shadow:0 4px 12px rgba(0,0,0,.5);transform:translateY(-10px);">
       </div>
-      <div id="ignacious-speech-tail"
-        style="position:fixed;top:95px;left:228px;width:0;height:0;
-               border-top:10px solid transparent;border-bottom:10px solid transparent;
-               border-right:14px solid #4a9a9a;opacity:0;
-               transition:opacity .3s;pointer-events:none;z-index:9999;">
-      </div>
+      <img id="ignacious-speech-tail" src="assets/Ignacious_Speech_2.png"
+        style="position:fixed;top:57px;left:127px;width:138px;height:auto;
+               opacity:0;
+               transition:opacity .3s;pointer-events:none;z-index:10000;">
+      </img>
 
       <!-- Dice Roller -->
       <div id="dice-roller-container" style="position:fixed;bottom:20px;left:20px;z-index:9998;">
@@ -1348,6 +2260,29 @@ function showSection(section, skipHistory = false) {
   content.style.padding = '24px 24px 24px 260px'
   content.style.overflow = ''
   content.style.overflowY = 'auto'
+
+  // FIX 3: Reset filters when navigating to monsters or spells page
+  if (section === 'monsters') {
+    monsterFilters = {
+      query: '',
+      cr: '',
+      type: '',
+      homebrew: '',
+      thirdParty: '',
+      environment: '',
+      spellcaster: ''
+    }
+  } else if (section === 'spells') {
+    spellFilters = {
+      query: '',
+      level: '',
+      school: '',
+      ritual: '',
+      concentration: '',
+      homebrew: '',
+      thirdParty: ''
+    }
+  }
 
   if (section === 'home')            renderHome(content)
   else if (section === 'monsters')   renderMonsters(content)
@@ -1381,12 +2316,13 @@ function renderHome(container) {
   container.innerHTML = `
     <div style="margin:0;">
 
-      <h1 style="font-size:26px;font-weight:bold;color:#e0d5c5;margin-bottom:4px;">
-        Welcome, Dungeon Master
+      <h1 style="font-size:26px;font-weight:bold;color:#e0d5c5;margin-bottom:28px;">
+        Welcome to Farsight Keep
       </h1>
-      <p style="color:#555;font-size:13px;margin-bottom:28px;">
-        Your 5e campaign companion.
-      </p>
+
+      ${(!compendiumData.activeCampaign || (compendiumData.players.length === 0 && compendiumData.npcs.length === 0)) ? `
+        <p style="color:#e0d5c5;margin-bottom:20px;">Create a new campaign or import one in settings to get started!</p>
+      ` : ''}
 
       ${compendiumData.activeCampaign ? `
         <div style="background:#5C5C5C;border:4px solid #2E2F2D;border-radius:8px;padding:20px;margin-bottom:18px;">
@@ -1422,14 +2358,28 @@ function renderHome(container) {
                   <img src="${p.portrait}" style="position:absolute;top:8px;right:8px;width:40px;height:40px;
                        border-radius:50%;object-fit:cover;border:2px solid #4587A2;">
                 ` : ''}
-                <div style="font-weight:bold;font-size:14px;margin-bottom:2px;
+                <div style="font-weight:bold;margin-bottom:2px;
                             white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#4587A2;
                             ${p.portrait ? 'padding-right:48px;' : ''}">
                   ${p.label || p.name}
                 </div>
-                <div style="font-size:11px;color:#666;margin-bottom:10px;
+                <div style="font-size:12px;color:#888;margin-bottom:10px;
                             white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                  ${p.name}
+                  ${(() => {
+                    const levelStr = p.level ? `LV ${p.level}` : ''
+                    const classStr = p.race || p.class
+                      ? `${p.race || ''} ${p.class || ''}`.trim()
+                      : (p.classInfo || '')
+                    const isNPC = p.isNPC === true
+
+                    if (isNPC) {
+                      return p.cr ? `CR ${p.cr} · ${p.name}` : p.name
+                    } else if (classStr) {
+                      return levelStr ? `${levelStr} · ${classStr}` : classStr
+                    } else {
+                      return levelStr || p.name
+                    }
+                  })()}
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:12px;">
                   <div style="background:#1A1C1E;padding:5px 4px;border-radius:3px;text-align:center;">
@@ -1438,11 +2388,16 @@ function renderHome(container) {
                   </div>
                   <div style="background:#1A1C1E;padding:5px 4px;border-radius:3px;text-align:center;">
                     <div style="font-size:9px;color:#666;letter-spacing:.06em;">AC</div>
-                    <div style="font-weight:bold;">${p.ac || '—'}</div>
+                    <div style="font-weight:bold;">${(p.acValue ?? p.ac) != null ? (p.acValue ?? p.ac) : '—'}</div>
                   </div>
                   <div style="background:#1A1C1E;padding:5px 4px;border-radius:3px;text-align:center;">
                     <div style="font-size:9px;color:#666;letter-spacing:.06em;">INIT</div>
-                    <div style="font-weight:bold;">${p.init ? modStr(parseInt(p.init)) : '—'}</div>
+                    <div style="font-weight:bold;">${(() => {
+                      if (p.initiativeBonus != null) return modStr(parseInt(p.initiativeBonus))
+                      const dex = parseInt(p.abilities?.[1]) || 10
+                      const initBonus = Math.floor((dex - 10) / 2)
+                      return modStr(initBonus)
+                    })()}</div>
                   </div>
                 </div>
                 </div>
@@ -1488,9 +2443,23 @@ function renderHome(container) {
                             ${p.portrait || p._draft?.portrait ? 'padding-right:48px;' : ''}">
                   ${p.label || p.name}
                 </div>
-                <div style="font-size:11px;color:#666;margin-bottom:10px;
+                <div style="font-size:11px;color:#888;margin-bottom:10px;
                             white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-                  ${p.name}
+                  ${(() => {
+                    const levelStr = p.level ? `LV ${p.level}` : ''
+                    const classStr = p.race || p.class
+                      ? `${p.race || ''} ${p.class || ''}`.trim()
+                      : (p.classInfo || '')
+                    const isNPC = p.isNPC === true
+
+                    if (isNPC) {
+                      return p.cr ? `CR ${p.cr} · ${p.name}` : p.name
+                    } else if (classStr) {
+                      return levelStr ? `${levelStr} · ${classStr}` : classStr
+                    } else {
+                      return levelStr || p.name
+                    }
+                  })()}
                 </div>
                 <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:12px;">
                   <div style="background:#1A1C1E;padding:5px 4px;border-radius:3px;text-align:center;">
@@ -1499,11 +2468,16 @@ function renderHome(container) {
                   </div>
                   <div style="background:#1A1C1E;padding:5px 4px;border-radius:3px;text-align:center;">
                     <div style="font-size:9px;color:#666;letter-spacing:.06em;">AC</div>
-                    <div style="font-weight:bold;">${p.ac || '—'}</div>
+                    <div style="font-weight:bold;">${(p.ac ?? p.acValue) != null ? (p.ac ?? p.acValue) : '—'}</div>
                   </div>
                   <div style="background:#1A1C1E;padding:5px 4px;border-radius:3px;text-align:center;">
                     <div style="font-size:9px;color:#666;letter-spacing:.06em;">INIT</div>
-                    <div style="font-weight:bold;">${p.init ? modStr(parseInt(p.init)) : '—'}</div>
+                    <div style="font-weight:bold;">${(() => {
+                      if (p.initiativeBonus != null) return modStr(parseInt(p.initiativeBonus))
+                      const dex = parseInt(p.abilities?.[1]) || 10
+                      const initBonus = Math.floor((dex - 10) / 2)
+                      return modStr(initBonus)
+                    })()}</div>
                   </div>
                 </div>
                 </div>
@@ -1537,7 +2511,7 @@ function renderEncounters(container) {
         ` : ''}
       </div>
       ${!campaign ? `
-        <p style="color:#555;">Load a campaign first to manage encounters.</p>
+        <p style="color:#e0d5c5;">Create a new campaign or import one in settings to manage encounters!</p>
       ` : list.length === 0 ? `
         <div style="color:#555;text-align:center;padding:60px 0;">
           <div style="font-size:40px;opacity:.2;margin-bottom:12px;">&#9876;</div>
@@ -1649,15 +2623,19 @@ function runEncounter(id) {
     enc.turn = e.combatState.turn
     enc.round = e.combatState.round
 
-    // Restore combatant states
+    // Restore combatant states (only combat-specific fields, not static character data)
     enc.current.combatants.forEach(c => {
       const savedState = e.combatState.combatants.find(s => s.uid === c.uid)
       if (savedState) {
+        // Restore truly dynamic combat state
         c.hpCurrent = savedState.hpCurrent
-        c.hpMax = savedState.hpMax
+        // NOTE: Do NOT restore hpMax, ac, abilities - those are static character stats
+        // that should come from the base combatant data (which migration updates)
         c.initiative = savedState.initiative
         c.conditions = savedState.conditions || []
         c.isEnemy = savedState.isEnemy
+
+        // Restore spell usage and limited-use features
         if (savedState.spellSlots) c.spellSlots = savedState.spellSlots
         if (savedState.dailySpells) c.dailySpells = savedState.dailySpells
         if (savedState.spells) c.spells = savedState.spells
@@ -1690,10 +2668,11 @@ function runEncounter(id) {
 function deleteEncounter(id) {
   const campaign = compendiumData.activeCampaign
   if (!campaign || !enc.list[campaign]) return
-  if (!confirm('Delete this encounter?')) return
-  enc.list[campaign] = enc.list[campaign].filter(e => e.id !== id)
-  saveEncounters(enc.list)
-  showSection('encounters')
+  confirmDelete('Delete encounter?', () => {
+    enc.list[campaign] = enc.list[campaign].filter(e => e.id !== id)
+    saveEncounters(enc.list)
+    showSection('encounters')
+  })
 }
 
 function enterEncounterBuilder() {
@@ -1702,20 +2681,31 @@ function enterEncounterBuilder() {
   // Nav buttons are now styled purely by their images, no dynamic styling needed
   const content = document.getElementById('content')
   content.style.padding = '0'
-  content.style.overflow = 'auto'
-  content.style.overflowY = 'auto'
+  content.style.overflow = 'hidden'
+  content.style.overflowY = 'hidden'
   renderEncounterBuilder(content)
+
+  // Set sidebar height after render to account for header
+  setTimeout(() => {
+    const topbar = document.getElementById('enc-topbar')
+    const sidebar = document.getElementById('enc-left')
+    if (topbar && sidebar) {
+      const headerHeight = topbar.offsetHeight
+      sidebar.style.height = `calc(100vh - ${headerHeight + 280}px)`
+    }
+  }, 0)
 }
 
 // ── Encounter Builder ─────────────────────────────────────────────
 function renderEncounterBuilder(container) {
   container.innerHTML = `
-    <div style="min-height:100%;background:linear-gradient(rgba(0,0,0,0.45), rgba(0,0,0,0.45)),
+    <div style="min-height:100%;background:linear-gradient(#5C5C5C 40px, transparent 40px),
+                linear-gradient(rgba(0,0,0,0.45), rgba(0,0,0,0.45)),
                 url('assets/Background.png') left -40px/1641px auto no-repeat fixed;">
       <div id="enc-topbar"
         style="display:flex;align-items:center;gap:12px;
-               padding:46px 20px 12px 20px;background:#5C5C5C;border-bottom:4px solid #2E2F2D;
-               flex-shrink:0;padding-left:240px;box-sizing:border-box;margin-top:-30px;">
+               padding:16px 20px 12px 20px;background:#5C5C5C;border-bottom:4px solid #2E2F2D;
+               flex-shrink:0;padding-left:240px;box-sizing:border-box;">
         <button onclick="popNav()"
           style="background:#3E3E3D;border:4px solid #2E2F2D;color:#C8C8C8;padding:5px 12px;
                  cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:12px;
@@ -1738,13 +2728,13 @@ function renderEncounterBuilder(container) {
           style="background:#1a4a2a;color:#8fd9a8;border:1px solid #2a7a4a;padding:6px 13px;
                  cursor:pointer;border-radius:4px;font-size:12px;font-family:var(--app-font);
                  white-space:nowrap;">
-          ▶ Start Combat
+          ▶ Start
         </button>
         <button id="btn-end-combat" onclick="endCombat()" disabled
           style="background:#262F35;color:#444;border:1px solid #2a3a5a;padding:6px 13px;
                  cursor:not-allowed;border-radius:4px;font-size:12px;font-family:var(--app-font);
                  white-space:nowrap;">
-          ■ End Combat
+          ■ End
         </button>
         <button id="enc-notes-btn" onclick="toggleEncNotes()"
           style="background:#262F35;color:#e0d5c5;border:1px solid #2a3a5a;padding:6px 13px;
@@ -1760,11 +2750,16 @@ function renderEncounterBuilder(container) {
         </button>
       </div>
 
-      <div style="display:flex;overflow:hidden;position:relative;flex:1;">
+      <div style="display:flex;position:relative;flex:1;">
 
         <div id="enc-left"
-          style="width:210px;flex-shrink:0;overflow-y:auto;
-                 background:#0a1520;border-right:1px solid #1e2d4a;">
+          style="width:210px;flex-shrink:0;overflow-y:auto;overflow-x:hidden;
+                 height:calc(100vh - 336px) !important;
+                 background:#0a1520;border:5px solid #262F35;
+                 scrollbar-width:none;-ms-overflow-style:none;">
+          <style>
+            #enc-left::-webkit-scrollbar { display: none; }
+          </style>
         </div>
 
         <div id="enc-center"
@@ -1794,6 +2789,8 @@ function renderEncounterBuilder(container) {
       </div>
     </div>
   `
+
+
   refreshInitSidebar()
   refreshCards()
 
@@ -1802,7 +2799,7 @@ function renderEncounterBuilder(container) {
     const btn = document.getElementById('btn-start-next')
     const e = document.getElementById('btn-end-combat')
     if (btn) {
-      btn.textContent = '⏭ Next Turn'
+      btn.textContent = '⏭ Next'
       btn.onclick = nextTurn
     }
     if (e) { e.disabled = false; e.style.color = '#e08080'; e.style.background = '#2a0000'; e.style.border = '1px solid #6a0000'; e.style.cursor = 'pointer' }
@@ -1822,14 +2819,15 @@ function refreshInitSidebar() {
     ? `Round <strong>${enc.round}</strong>`
     : 'Round <strong>—</strong>'
   const roundHeader = `
-    <div style="padding:12px 10px;background:#0d1b2a;border-bottom:2px solid #1e2d4a;
+    <div style="position:sticky;top:0;z-index:5;background:#0a1520;
+                padding:12px 10px;border-bottom:2px solid #1e2d4a;
                 text-align:center;font-size:13px;color:#aaa;">
       ${roundDisplay}
     </div>
   `
 
   if (combatants.length === 0) {
-    sidebar.innerHTML = roundHeader + `<p style="color:#333;font-size:12px;padding:14px;text-align:center;">
+    sidebar.innerHTML = roundHeader + `<p style="color:#7B9BA8;font-size:12px;padding:14px;text-align:center;">
       Add combatants →</p>`
     return
   }
@@ -1838,22 +2836,37 @@ function refreshInitSidebar() {
     const barColor = pct > 50 ? '#2a7a2a' : pct > 25 ? '#7a6a00' : '#8a0000'
     const isActive = enc.inCombat && i === enc.turn
     return `
-      <div onclick="scrollToCard('${c.uid}')"
+      <div id="sidebar-row-${c.uid}"
         style="padding:9px 10px;cursor:pointer;border-bottom:1px solid #111c2a;
                background:${isActive ? '#1e3d5c' : 'transparent'};
-               border-left:3px solid ${isActive ? '#4587A2' : 'transparent'};"
-        onmouseover="if(!${isActive})this.style.background='#0e1c2e'"
-        onmouseout="if(!${isActive})this.style.background='transparent'">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
-          <div style="font-size:12px;font-weight:bold;white-space:nowrap;overflow:hidden;
-                      text-overflow:ellipsis;max-width:138px;
-                      color:${isActive ? '#8fd9a8' : '#e0d5c5'};">${c.name}</div>
-          <div style="font-size:11px;color:#555;flex-shrink:0;margin-left:4px;">${c.initiative}</div>
+               border-left:3px solid ${isActive ? '#4587A2' : 'transparent'};
+               position:relative;"
+        onmouseover="if(!${isActive})this.style.background='#0e1c2e';document.getElementById('remove-btn-${c.uid}').style.opacity='1'"
+        onmouseout="if(!${isActive})this.style.background='transparent';document.getElementById('remove-btn-${c.uid}').style.opacity='0'">
+        <div onclick="scrollToCard('${c.uid}')" style="pointer-events:auto;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
+            <div style="font-size:12px;font-weight:bold;white-space:nowrap;overflow:hidden;
+                        text-overflow:ellipsis;max-width:138px;
+                        color:${isActive ? '#ffffff' : '#e0d5c5'};">${c.name}</div>
+            <div style="font-size:11px;color:#C8C8C8;flex-shrink:0;margin-left:4px;">${c.initiative}</div>
+          </div>
+          <div style="font-size:11px;color:#C8C8C8;margin-bottom:3px;">
+            AC ${(() => { const n = parseInt(c.ac); return !isNaN(n) ? n : (c.ac || '—') })()} · ${c.hpCurrent}/${c.hpMax} HP
+            ${c.hpCurrent <= 0 ? '<span style="font-weight:bold;color:#ff0000;margin-left:6px;">DEAD</span>' : ''}
+          </div>
+          <div style="height:4px;background:#1e2d4a;border-radius:2px;">
+            <div style="width:${pct}%;height:100%;background:${barColor};border-radius:2px;"></div>
+          </div>
         </div>
-        <div style="font-size:11px;color:#555;margin-bottom:3px;">${c.hpCurrent}/${c.hpMax} HP</div>
-        <div style="height:4px;background:#1e2d4a;border-radius:2px;">
-          <div style="width:${pct}%;height:100%;background:${barColor};border-radius:2px;"></div>
-        </div>
+        <button id="remove-btn-${c.uid}"
+          onclick="event.stopPropagation();removeCombatant('${c.uid}')"
+          style="position:absolute;top:6px;right:6px;
+                 background:rgba(26,28,30,0.95);border:1px solid #8b0000;color:#ff6666;
+                 cursor:pointer;font-size:14px;width:20px;height:20px;
+                 border-radius:3px;padding:0;display:flex;align-items:center;
+                 justify-content:center;opacity:0;transition:opacity 0.15s ease;
+                 font-weight:bold;line-height:1;"
+          title="Remove from encounter">✕</button>
       </div>
     `
   }).join('')
@@ -1898,8 +2911,7 @@ function updateDifficultyDisplay() {
   const icon = difficultyIcons[difficulty]
 
   if (totalXP > 0) {
-    label.innerHTML = `${icon ? `<img src="assets/${icon}" alt="${difficulty}" style="width:64px;height:64px;object-fit:contain;vertical-align:middle;margin-right:10px;" />` : ''}Total Enemy XP: <strong>${totalXP.toLocaleString()}</strong> ·
-      <span style="color:${color};">${difficulty}</span>`
+    label.innerHTML = `${icon ? `<img src="assets/${icon}" alt="${difficulty}" style="width:64px;height:64px;object-fit:contain;vertical-align:middle;margin-right:10px;" />` : ''}<span style="color:#1E231A;font-size:15px;vertical-align:middle;">${difficulty}</span><span style="color:#1E231A;font-size:15px;vertical-align:middle;margin:0 8px;">·</span><span style="color:#1E231A;font-size:15px;vertical-align:middle;">Total XP: <strong>${totalXP.toLocaleString()}</strong></span>`
   } else {
     label.innerHTML = ''
   }
@@ -1925,16 +2937,18 @@ function refreshCards() {
     return
   }
   const scrollLeft = center.scrollLeft
+  const scrollPositions = {}
+  center.querySelectorAll('[id^="card-"]').forEach(card => {
+    scrollPositions[card.id] = card.scrollTop
+  })
   center.innerHTML = combatants.map((c, i) => buildCard(c, enc.inCombat && i === enc.turn)).join('')
-  requestAnimationFrame(() => { center.scrollLeft = scrollLeft })
-  if (enc.inCombat) {
-    const activeUid = combatants[enc.turn]?.uid
-    if (activeUid) {
-      setTimeout(() => {
-        scrollToCard(activeUid)
-      }, 60)
-    }
-  }
+  requestAnimationFrame(() => {
+    center.scrollLeft = scrollLeft
+    Object.keys(scrollPositions).forEach(cardId => {
+      const card = document.getElementById(cardId)
+      if (card) card.scrollTop = scrollPositions[cardId]
+    })
+  })
 }
 
 function hpBarColor(pct) {
@@ -1957,10 +2971,33 @@ function buildCard(c, isActive) {
   // Get ability scores (handle different data formats)
   function getAbilityScore(ability) {
     const abMap = { str: 0, dex: 1, con: 2, int: 3, wis: 4, cha: 5 }
+
+    // 1. Try c.abilities array
     if (c.abilities && Array.isArray(c.abilities)) {
-      return parseInt(c.abilities[abMap[ability]]) || 10
+      const score = parseInt(c.abilities[abMap[ability]])
+      if (!isNaN(score)) return score
     }
-    return parseInt(c[ability]) || 10
+
+    // 2. Try c.fullMonsterData.abilities array (for encounter-only monsters)
+    if (c.fullMonsterData?.abilities && Array.isArray(c.fullMonsterData.abilities)) {
+      const score = parseInt(c.fullMonsterData.abilities[abMap[ability]])
+      if (!isNaN(score)) return score
+    }
+
+    // 3. Try c[ability] individual field
+    if (c[ability] !== undefined) {
+      const score = parseInt(c[ability])
+      if (!isNaN(score)) return score
+    }
+
+    // 4. Try c.fullMonsterData[ability] individual field (for encounter-only monsters)
+    if (c.fullMonsterData?.[ability] !== undefined) {
+      const score = parseInt(c.fullMonsterData[ability])
+      if (!isNaN(score)) return score
+    }
+
+    // 5. Default to 10 if all lookups failed
+    return 10
   }
 
   const availConds = CONDITIONS.filter(cond => !c.conditions.includes(cond))
@@ -1989,39 +3026,78 @@ function buildCard(c, isActive) {
           const text = item.text || ''
           const long = text.length > 120 || text.includes('\n')
           const tid = `trait-${c.uid}-${section}-${idx}`
+
+          // Fallback: if charges is undefined/null, try reading from limitedUsage
+          const charges = item.charges ?? (item.limitedUsage?.type === 'per_day' || item.limitedUsage?.type === 'charges' ? item.limitedUsage.count : null)
+          const chargesCurrent = item.chargesCurrent ?? (item.limitedUsage?.type === 'per_day' || item.limitedUsage?.type === 'charges' ? item.limitedUsage.count : null)
+
+          // Extract recharge with fallback
+          let recharge = item.recharge
+          if (recharge === null || recharge === undefined) {
+            if (item.limitedUsage?.type === 'recharge_5_6') recharge = 5
+            else if (item.limitedUsage?.type === 'recharge_6') recharge = 6
+            else if (item.limitedUsage?.type?.startsWith('recharge_')) {
+              const match = item.limitedUsage.type.match(/recharge_(\d+)/)
+              if (match) recharge = parseInt(match[1])
+            }
+          }
+
+          // Build display name (recharge moved to separate line below)
+          const displayName = item.name || ''
+          const rechargeText = (recharge !== null && recharge !== undefined && recharge !== '' && charges === null)
+            ? `(Recharge ${recharge}${recharge === 6 ? '' : `-6`})`
+            : ''
+
           return `
           <div style="margin-bottom:8px;">
             <div style="display:flex;align-items:center;justify-content:space-between;gap:4px;">
               <div onclick="toggleTraitText('${tid}')"
-                style="display:flex;align-items:center;gap:4px;flex:1;min-width:0;
+                style="display:flex;flex-direction:column;gap:2px;flex:1;min-width:0;
                        ${long ? 'cursor:pointer;' : ''}">
-                <strong style="font-size:13px;overflow:hidden;text-overflow:ellipsis;
-                               white-space:nowrap;">${item.name || ''}</strong>
-                ${long ? `<span id="${tid}-arrow"
-                  style="font-size:11px;color:#555;flex-shrink:0;">▼</span>` : ''}
+                <div style="display:flex;align-items:center;gap:4px;">
+                  <strong style="font-size:13px;overflow:hidden;text-overflow:ellipsis;
+                                 white-space:nowrap;">${displayName}</strong>
+                  ${long ? `<span id="${tid}-arrow"
+                    style="font-size:11px;color:#555;flex-shrink:0;">▼</span>` : ''}
+                </div>
+                ${rechargeText ? `<div style="font-size:12px;color:#b8b0a0;">${rechargeText}</div>` : ''}
               </div>
-              ${item.charges !== null ? `
+              ${item.attack && item.attack.atk ? `
+                <div style="display:flex;align-items:center;gap:3px;flex-shrink:0;position:relative;">
+                  ${item.attack.atk !== '—' ? `
+                    <button onclick="rollAttack('${c.uid}','${(item.name || '').replace(/'/g, "\\'")}',${JSON.stringify(item.attack || {}).replace(/"/g, '&quot;')})"
+                      style="background:#0f3460;border:none;color:#e0d5c5;padding:3px 8px;
+                             cursor:pointer;border-radius:3px;font-size:11px;line-height:1.3;
+                             white-space:nowrap;"
+                      title="Roll attack">Roll Attack</button>
+                  ` : ''}
+                  <button id="dmg-btn-${c.uid}-${idx}" onclick="${item.attack.altDiceCount ?
+                    `showDamagePopup('${c.uid}','${(item.name || '').replace(/'/g, "\\'")}',${JSON.stringify(item.attack || {}).replace(/"/g, '&quot;')},this)` :
+                    `rollDamage('${c.uid}','${(item.name || '').replace(/'/g, "\\'")}',${JSON.stringify(item.attack || {}).replace(/"/g, '&quot;')},'standard')`}"
+                    style="background:#0f3460;border:none;color:#e0d5c5;padding:3px 8px;
+                           cursor:pointer;border-radius:3px;font-size:11px;line-height:1.3;
+                           white-space:nowrap;"
+                    title="Roll damage">Roll Damage</button>
+                </div>
+              ` : ''}
+              ${charges !== null ? `
                 <div style="display:flex;align-items:center;gap:3px;flex-shrink:0;">
                   <button onclick="adjustCharge('${c.uid}','${section}',${idx},-1)"
                     style="background:#0f3460;border:none;color:#e0d5c5;width:22px;height:22px;
                            cursor:pointer;border-radius:3px;font-size:14px;line-height:1;
                            padding:0;display:flex;align-items:center;justify-content:center;">-</button>
                   <span style="font-size:12px;color:#aaa;min-width:36px;text-align:center;">
-                    ${item.chargesCurrent}/${item.charges}</span>
+                    ${chargesCurrent}/${charges}</span>
                   <button onclick="adjustCharge('${c.uid}','${section}',${idx},1)"
                     style="background:#0f3460;border:none;color:#e0d5c5;width:22px;height:22px;
                            cursor:pointer;border-radius:3px;font-size:14px;line-height:1;
                            padding:0;display:flex;align-items:center;justify-content:center;">+</button>
                 </div>
-              ` : item.recharge !== null ? `
-                <span style="font-size:12px;color:#555;background:#0f3460;
-                             padding:2px 7px;border-radius:8px;flex-shrink:0;white-space:nowrap;">
-                  Rchg ${item.recharge}+</span>
               ` : ''}
             </div>
             <div id="${tid}"
               style="color:#b8b0a0;font-size:13px;line-height:1.5;margin-top:1px;white-space:pre-wrap;
-                     ${long ? 'overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;' : ''}">${text.trim()}</div>
+                     ${long ? 'overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;' : ''}">${renderMarkdown(text.trim())}</div>
           </div>`
         }).join('')}
       </div>`
@@ -2029,13 +3105,13 @@ function buildCard(c, isActive) {
 
   const slotsHTML = c.spellSlots && c.spellSlots.length > 0 ? `
     <div style="margin-top:12px;">
-      <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
+      <div style="font-size:12px;color:#e0d5c5;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">SPELL SLOTS</div>
       ${c.spellSlots.map((slot, si) => {
         const avail = slot.total - slot.used
         return `
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;">
-            <span style="font-size:12px;color:#555;width:24px;">L${slot.level}</span>
+            <span style="font-size:12px;color:#e0d5c5;width:30px;">Lv ${slot.level}</span>
             <button onclick="adjustSlot('${c.uid}',${si},1)"
               ${avail === 0 ? 'disabled' : ''}
               style="background:#2a0000;border:none;color:${avail === 0 ? '#333' : '#e08080'};width:22px;height:22px;
@@ -2055,11 +3131,11 @@ function buildCard(c, isActive) {
 
   const dailySpellsHTML = c.dailySpells && c.dailySpells.length > 0 ? `
     <div style="margin-top:12px;">
-      <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
+      <div style="font-size:12px;color:#e0d5c5;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">SPELLS</div>
       ${c.dailySpells.map((grp, gi) => `
         <div style="margin-bottom:7px;">
-          <div style="font-size:11px;color:#444;letter-spacing:.05em;margin-bottom:4px;
+          <div style="font-size:11px;color:#e0d5c5;letter-spacing:.05em;margin-bottom:4px;
                       text-transform:uppercase;">${grp.group}</div>
           ${grp.tracked
             ? grp.spells.map((sp, si) => {
@@ -2094,8 +3170,8 @@ function buildCard(c, isActive) {
   ` : ''
 
   const knownSpellsHTML = (() => {
-    if (!c.spells || c.spells.length === 0) return ''
-    const sorted = [...c.spells].sort((a, b) => (parseInt(a.level) || 0) - (parseInt(b.level) || 0))
+    if (!c.selectedSpells || c.selectedSpells.length === 0) return ''
+    const sorted = [...c.selectedSpells].sort((a, b) => (parseInt(a.level) || 0) - (parseInt(b.level) || 0))
     const levelMap = new Map()
     sorted.forEach((s, i) => {
       const lvl = parseInt(s.level) || 0
@@ -2151,7 +3227,7 @@ function buildCard(c, isActive) {
             <div style="display:flex;align-items:center;gap:0;${rowBg}padding:4px 8px 4px 5px;"
               onmouseover="this.style.background='#142840'"
               onmouseout="this.style.background='#0f1e30'">
-              <button onclick="adjustCombatantSpellUse('${c.uid}',${s.idx},-1)"
+              <button onclick="adjustCombatantSpellUse('${c.uid}','${s.name.replace(/'/g, "\\'")}', -1)"
                 ${s.usesCurrent === 0 ? 'disabled' : ''}
                 style="background:#2a0000;border:none;color:${s.usesCurrent === 0 ? '#333' : '#e08080'};
                        width:20px;height:20px;cursor:${s.usesCurrent === 0 ? 'default' : 'pointer'};
@@ -2165,7 +3241,7 @@ function buildCard(c, isActive) {
                   style="font-size:11px;color:#555;flex-shrink:0;">▼</span>
               </div>
               <span style="flex-shrink:0;white-space:nowrap;margin-right:5px;">${counterHTML}</span>
-              <button onclick="adjustCombatantSpellUse('${c.uid}',${s.idx},1)"
+              <button onclick="adjustCombatantSpellUse('${c.uid}','${s.name.replace(/'/g, "\\'")}', 1)"
                 ${s.usesCurrent === s.usesMax ? 'disabled' : ''}
                 style="background:#082012;border:none;color:${s.usesCurrent === s.usesMax ? '#333' : '#80c880'};
                        width:20px;height:20px;cursor:${s.usesCurrent === s.usesMax ? 'default' : 'pointer'};
@@ -2194,11 +3270,11 @@ function buildCard(c, isActive) {
 
     return `
       <div style="margin-top:12px;">
-        <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
+        <div style="font-size:12px;color:#e0d5c5;letter-spacing:.08em;font-weight:700;
                     margin-bottom:6px;">SPELLS</div>
         ${Array.from(levelMap.entries()).map(([lvl, spells]) => `
           <div style="margin-bottom:8px;">
-            <div style="font-size:11px;color:#444;letter-spacing:.05em;margin-bottom:4px;
+            <div style="font-size:11px;color:#e0d5c5;letter-spacing:.05em;margin-bottom:4px;
                         text-transform:uppercase;">${levelLabel(lvl)}</div>
             ${spells.map(s => spellRow(s, lvl)).join('')}
           </div>`).join('')}
@@ -2210,10 +3286,17 @@ function buildCard(c, isActive) {
       style="min-width:420px;max-width:420px;background:#262F35;flex-shrink:0;
              border:${isActive ? '6px' : '2px'} solid ${isActive ? '#4587A2' : '#1e2d4a'};border-radius:6px;
              padding:16px;align-self:flex-start;position:relative;
-             max-height:calc(100vh - 220px);overflow-y:auto;overflow-x:visible;padding-bottom:40px;
+             max-height:calc(100vh - 220px);overflow-y:auto;overflow-x:visible;padding-bottom:80px;
              scrollbar-width:none;-ms-overflow-style:none;">
       <style>
         #card-${c.uid}::-webkit-scrollbar { display: none; }
+        #hp-input-${c.uid}::placeholder { color: #C8C8C8; opacity: 1; }
+        #hp-input-${c.uid}::-moz-placeholder { color: #C8C8C8; opacity: 1; }
+        #card-${c.uid} input[type=number]::-webkit-inner-spin-button,
+        #card-${c.uid} input[type=number]::-webkit-outer-spin-button {
+          -webkit-appearance: none;
+          margin: 0;
+        }
       </style>
       ${pct <= 50 ? `<img src="assets/Bloodied.png" alt="Bloodied"
         style="position:absolute;top:-2px;right:0;width:96px;height:96px;margin:0;padding:0;
@@ -2227,7 +3310,28 @@ function buildCard(c, isActive) {
           <div style="font-weight:bold;font-size:18px;margin-bottom:2px;color:#4587A2;
                       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.name}</div>
           <div style="display:flex;align-items:center;gap:6px;">
-            <span style="font-size:13px;color:#555;">${c.type}</span>
+            <span style="font-size:13px;color:#C8C8C8;">${(() => {
+              if (c.isPC) {
+                // Format: "Class (Subclass) Level - Race" or "Class Level - Race"
+                let subtitle = ''
+                if (c.class) {
+                  subtitle = c.subclass ? `${c.class} (${c.subclass})` : c.class
+                  subtitle += ` ${c.level || 1}`
+                } else {
+                  subtitle = `Level ${c.level || 1}`
+                }
+                if (c.race) {
+                  subtitle += ` - ${c.race}`
+                }
+                return subtitle
+              }
+              // For NPCs/Monsters, build subtitle from CR, size, and type
+              const parts = []
+              if (c.cr) parts.push(`CR ${c.cr}`)
+              if (c.size) parts.push(expandSize(c.size))
+              if (c.type) parts.push(c.type)
+              return parts.join(' ')
+            })()}</span>
             ${!c.isPC ? `
               <button onclick="toggleAllyEnemy('${c.uid}')"
                 style="background:${c.isEnemy === false ? '#1a4a2a' : '#4a0000'};
@@ -2240,41 +3344,92 @@ function buildCard(c, isActive) {
             ` : ''}
           </div>
         </div>
-        <button onclick="removeCombatant('${c.uid}')"
-          style="background:none;border:none;color:#4587A2;cursor:pointer;
-                 font-size:16px;padding:0;flex-shrink:0;" title="Remove">✕</button>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;">
         <div style="background:#1A1C1E;padding:7px 6px;border-radius:3px;text-align:center;">
-          <div style="font-size:11px;color:#444;letter-spacing:.05em;margin-bottom:2px;">INIT</div>
+          <div style="font-size:11px;color:#C8C8C8;letter-spacing:.05em;margin-bottom:2px;">INIT</div>
           <input type="number" value="${c.initiative}"
             onchange="setInit('${c.uid}',this.value)"
             style="background:transparent;border:none;color:#e0d5c5;font-family:var(--app-font);
                    font-size:18px;font-weight:bold;width:100%;text-align:center;outline:none;
-                   -moz-appearance:textfield;" />
+                   padding:0;margin:0;-moz-appearance:textfield;
+                   -webkit-appearance:none;appearance:none;box-sizing:border-box;" />
         </div>
-        <div style="background:#1A1C1E;padding:7px 6px;border-radius:3px;text-align:center;">
-          <div style="font-size:11px;color:#444;letter-spacing:.05em;margin-bottom:2px;">AC</div>
-          <div style="font-size:18px;font-weight:bold;">${parseInt(c.ac) || c.ac || '—'}</div>
+        <div style="background:#1A1C1E;padding:7px 6px 27px 6px;text-align:center;
+                    clip-path:polygon(0% 0%, 100% 0%, 100% 65%, 50% 100%, 0% 65%);
+                    position:relative;">
+          <div style="font-size:11px;color:#C8C8C8;letter-spacing:.05em;margin-bottom:2px;">AC</div>
+          <div style="font-size:18px;font-weight:bold;">${(() => {
+            const acNum = parseInt(c.ac)
+            return !isNaN(acNum) ? acNum : '—'
+          })()}</div>
           ${(() => {
-            const armorType = c.armor || (c.ac ? String(c.ac).replace(/^\d+\s*/, '').replace(/[()]/g, '').trim() : '')
-            return armorType ? `<div style="font-size:10px !important;color:#888888 !important;font-weight:normal !important;display:block;margin-top:2px;">${armorType}</div>` : ''
+            const armorText = c.armor || (typeof c.ac === 'string' ?
+              (c.ac.match(/\(([^)]+)\)/) || [])[1] : '')
+            return armorText ?
+              `<div style="font-size:9px;color:#888;margin-top:2px;">${armorText}</div>` : ''
           })()}
         </div>
         <div style="background:#1A1C1E;padding:7px 6px;border-radius:3px;text-align:center;">
-          <div style="font-size:11px;color:#444;letter-spacing:.05em;margin-bottom:2px;">SPD</div>
-          <div style="font-size:15px;font-weight:bold;overflow:hidden;
-                      text-overflow:ellipsis;white-space:nowrap;">${c.speed || '—'}</div>
+          <div style="font-size:11px;color:#C8C8C8;letter-spacing:.05em;margin-bottom:2px;">SPD</div>
+          ${(() => {
+            if (!c.speed || c.speed === '—') return '<div style="font-size:15px;font-weight:bold;">—</div>'
+
+            // Parse speed string into movement types
+            const speedStr = String(c.speed).toLowerCase()
+            const movements = []
+
+            // Match patterns like "30 ft.", "fly 60 ft.", "60 ft. fly", etc.
+            // First, try to extract base walking speed (first number without a type label)
+            const walkMatch = speedStr.match(/^(\d+)\s*(?:ft\.?)?(?:\s*,|$)/)
+            if (walkMatch) {
+              movements.push({ type: 'walk', value: walkMatch[1] })
+            }
+
+            // Extract other movement types (fly, climb, burrow, swim)
+            const types = ['fly', 'climb', 'burrow', 'swim']
+            types.forEach(type => {
+              // Match "fly 60 ft." or "60 ft. fly"
+              const regex1 = new RegExp(type + '\\s+(\\d+)\\s*(?:ft\\.?)?', 'i')
+              const regex2 = new RegExp('(\\d+)\\s*(?:ft\\.?)?\\s+' + type, 'i')
+              const match = speedStr.match(regex1) || speedStr.match(regex2)
+              if (match) {
+                movements.push({ type, value: match[1] })
+              }
+            })
+
+            if (movements.length === 0) {
+              // Fallback: just display as-is if parsing failed
+              return '<div style="font-size:15px;font-weight:bold;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + c.speed + '</div>'
+            }
+
+            // If only one movement type, display normally on one line
+            if (movements.length === 1) {
+              return '<div style="font-size:15px;font-weight:bold;">' + movements[0].value + ' ft.</div>'
+            }
+
+            // Multiple movement types: stack vertically with smaller font
+            // Font size: start at 15px, reduce by 1.5px per extra type, min 7.5px (50% of 15px)
+            const fontSize = Math.max(7.5, 15 - ((movements.length - 1) * 1.5))
+
+            return movements.map((m, i) => {
+              const label = m.type === 'walk' ? '' : (m.type.charAt(0).toUpperCase() + m.type.slice(1) + ' ')
+              return '<div style="font-size:' + fontSize + 'px;font-weight:bold;line-height:1.3;">' + label + m.value + ' ft.</div>'
+            }).join('')
+          })()}
         </div>
       </div>
 
       <div style="margin-bottom:10px;">
-        <div style="display:flex;justify-content:space-between;margin-bottom:5px;">
-          <span style="font-size:13px;color:#555;">HP</span>
-          <span style="font-size:15px;font-weight:bold;">${c.hpCurrent} / ${c.hpMax}</span>
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+          <span style="font-size:13px;color:#C8C8C8;">HP</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <span style="font-size:15px;font-weight:bold;">${c.hpCurrent} / ${c.hpMax}</span>
+            ${c.hpCurrent <= 0 ? '<span style="font-size:13px;font-weight:bold;color:#ff0000;">DEAD</span>' : ''}
+          </div>
         </div>
-        <div style="height:8px;background:#1e2d4a;border-radius:4px;">
+        <div style="height:8px;background:#1a1a1a;border-radius:4px;">
           <div style="width:${pct}%;height:100%;background:${hpBarColor(pct)};
                       border-radius:4px;transition:width .3s,background .3s;"></div>
         </div>
@@ -2296,6 +3451,26 @@ function buildCard(c, isActive) {
           Heal</button>
       </div>
 
+      <div style="margin-bottom:10px;">
+        <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
+                    margin-bottom:5px;">CONDITIONS</div>
+        ${c.conditions.length ? `<div style="display:flex;flex-wrap:wrap;margin-bottom:5px;">${activeChips}</div>` : ''}
+        <div style="position:relative;display:inline-block;">
+          <button onclick="toggleCondDropdown('${c.uid}')"
+            style="background:#0f1e30;border:1px solid #2a3a5a;color:#4a9a9a;font-weight:bold;
+                   padding:4px 11px;border-radius:4px;cursor:pointer;
+                   font-size:12px;font-family:var(--app-font);">
+            + Condition</button>
+          <div id="cond-drop-${c.uid}"
+            style="display:none;position:absolute;top:calc(100% + 3px);left:0;z-index:200;
+                   background:#0d1b2a;border:1px solid #2a3a5a;border-radius:4px;
+                   max-height:180px;overflow-y:auto;min-width:160px;
+                   box-shadow:0 4px 12px rgba(0,0,0,.7);">
+            ${availConds.length ? condDropItems : '<div style="padding:8px 12px;font-size:12px;color:#444;">All conditions active</div>'}
+          </div>
+        </div>
+      </div>
+
       <!-- Ability Scores -->
       <div style="margin-bottom:12px;">
         <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
@@ -2308,39 +3483,48 @@ function buildCard(c, isActive) {
               <div style="background:#1A1C1E;padding:6px 3px;border-radius:3px;text-align:center;">
                 <div style="font-size:9px;color:#4a9a9a;letter-spacing:.05em;margin-bottom:2px;">${ab.toUpperCase()}</div>
                 <div style="font-size:15px;font-weight:bold;">${score}</div>
-                <div style="font-size:11px;color:#888;">${modStr(mod)}</div>
+                <div style="font-size:11px;color:#C8C8C8;">${modStr(mod)}</div>
               </div>`
           }).join('')}
         </div>
       </div>
 
-      <!-- Saving Throws -->
-      ${c.save || (c.savingThrows && c.savingThrows.length > 0) ? `
-        <div style="margin-bottom:12px;">
-          <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
-                      margin-bottom:4px;">SAVING THROWS</div>
-          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">
-            ${c.save || c.savingThrows.map(st => {
+      <!-- Saving Throws (always visible) -->
+      ${(() => {
+        // Handle both string (monsters) and array (PCs/NPCs) formats
+        let savesText = ''
+        if (c.save) {
+          savesText = c.save
+        } else if (c.savingThrows) {
+          if (Array.isArray(c.savingThrows)) {
+            // Sort by standard D&D ability order
+            const ABILITY_ORDER = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA']
+            const sorted = [...c.savingThrows].sort((a, b) => {
+              const aName = typeof a.ability === 'number'
+                ? ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'][a.ability]
+                : String(a.ability).toUpperCase()
+              const bName = typeof b.ability === 'number'
+                ? ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'][b.ability]
+                : String(b.ability).toUpperCase()
+              return ABILITY_ORDER.indexOf(aName) - ABILITY_ORDER.indexOf(bName)
+            })
+            savesText = sorted.map(st => {
               const abilityName = typeof st.ability === 'number' ? ['STR','DEX','CON','INT','WIS','CHA'][st.ability] : st.ability
               return `${abilityName} ${st.modifier >= 0 ? '+' : ''}${st.modifier}`
-            }).join(', ')}
-          </div>
-        </div>
-      ` : ''}
+            }).join(', ')
+          } else if (typeof c.savingThrows === 'string') {
+            savesText = c.savingThrows
+          }
+        }
 
-      <!-- Skills -->
-      ${c.skill || (c.skills && c.skills.length > 0) ? `
-        <div style="margin-bottom:12px;">
-          <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
-                      margin-bottom:4px;">SKILLS</div>
-          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">
-            ${c.skill || c.skills.map(sk => {
-              const skillName = typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : (sk.name || 'Unknown')
-              return `${skillName} ${sk.modifier >= 0 ? '+' : ''}${sk.modifier}`
-            }).join(', ')}
+        return savesText ? `
+          <div style="margin-bottom:12px;">
+            <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
+                        margin-bottom:4px;">SAVING THROWS</div>
+            <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${savesText}</div>
           </div>
-        </div>
-      ` : ''}
+        ` : ''
+      })()}
 
       <!-- Resistances, Immunities -->
       ${c.resist ? `
@@ -2372,49 +3556,117 @@ function buildCard(c, isActive) {
         </div>
       ` : ''}
 
-      <!-- Senses -->
-      ${c.senses ? `
-        <div style="margin-bottom:8px;">
-          <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
-                      margin-bottom:4px;">SENSES</div>
-          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${c.senses}</div>
-        </div>
-      ` : ''}
+      <!-- ADDITIONAL STATS Section (collapsible) -->
+      ${(() => {
+        // Check if any stats exist
+        const hasSkills = c.skills && ((Array.isArray(c.skills) && c.skills.length > 0) || (typeof c.skills === 'string' && c.skills.trim()))
+        const hasSenses = c.senses && c.senses.trim()
+        const hasLanguages = c.languages && c.languages.trim()
 
-      <!-- Languages -->
-      ${c.languages ? `
-        <div style="margin-bottom:12px;">
-          <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
-                      margin-bottom:4px;">LANGUAGES</div>
-          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${c.languages}</div>
-        </div>
-      ` : ''}
+        // Calculate passive senses to check if we have any content
+        const getProfBonus = () => {
+          if (c.proficiencyBonus) return c.proficiencyBonus
+          if (c.isPC) return Math.floor((parseInt(c.level) || 1 - 1) / 4) + 2
+          const cr = parseFloat(c.cr) || 0
+          if (cr >= 29) return 9
+          if (cr >= 25) return 8
+          if (cr >= 21) return 7
+          if (cr >= 17) return 6
+          if (cr >= 13) return 5
+          if (cr >= 9) return 4
+          if (cr >= 5) return 3
+          return 2
+        }
+        const profBonus = getProfBonus()
 
-      <div style="margin-bottom:10px;">
-        <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
-                    margin-bottom:5px;">CONDITIONS</div>
-        ${c.conditions.length ? `<div style="display:flex;flex-wrap:wrap;margin-bottom:5px;">${activeChips}</div>` : ''}
-        <div style="position:relative;display:inline-block;">
-          <button onclick="toggleCondDropdown('${c.uid}')"
-            style="background:#0f1e30;border:1px solid #2a3a5a;color:#4a9a9a;font-weight:bold;
-                   padding:4px 11px;border-radius:4px;cursor:pointer;
-                   font-size:12px;font-family:var(--app-font);">
-            + Condition</button>
-          <div id="cond-drop-${c.uid}"
-            style="display:none;position:absolute;top:calc(100% + 3px);left:0;z-index:200;
-                   background:#0d1b2a;border:1px solid #2a3a5a;border-radius:4px;
-                   max-height:180px;overflow-y:auto;min-width:160px;
-                   box-shadow:0 4px 12px rgba(0,0,0,.7);">
-            ${availConds.length ? condDropItems : '<div style="padding:8px 12px;font-size:12px;color:#444;">All conditions active</div>'}
+        const passives = []
+
+        // Passive Perception (always calculate for all combatants)
+        if (c.passive !== undefined && c.passive !== '' && c.passive !== null) {
+          passives.push(`Perception ${c.passive}`)
+        } else {
+          const wis = getAbilityScore('wis')
+          const wisMod = abilityMod(wis)
+          const perceptionSkill = Array.isArray(c.skills)
+            ? c.skills.find(sk => (typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : sk.name) === 'Perception')
+            : null
+          const passivePerception = 10 + wisMod + (perceptionSkill ? profBonus : 0)
+          passives.push(`Perception ${passivePerception}`)
+        }
+
+        // Passive Insight (all combatants)
+        if (c.passiveInsight !== undefined && c.passiveInsight !== null) {
+          passives.push(`Insight ${c.passiveInsight}`)
+        } else if (c.isPC || !c.isPC) { // Show for all combatants
+          const wis = getAbilityScore('wis')
+          const wisMod = abilityMod(wis)
+          const insightSkill = Array.isArray(c.skills)
+            ? c.skills.find(sk => (typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : sk.name) === 'Insight')
+            : null
+          const passiveInsight = 10 + wisMod + (insightSkill ? profBonus : 0)
+          passives.push(`Insight ${passiveInsight}`)
+        }
+
+        // Passive Investigation (all combatants)
+        if (c.passiveInvestigation !== undefined && c.passiveInvestigation !== null) {
+          passives.push(`Investigation ${c.passiveInvestigation}`)
+        } else if (c.isPC || !c.isPC) { // Show for all combatants
+          const int = getAbilityScore('int')
+          const intMod = abilityMod(int)
+          const investigationSkill = Array.isArray(c.skills)
+            ? c.skills.find(sk => (typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : sk.name) === 'Investigation')
+            : null
+          const passiveInvestigation = 10 + intMod + (investigationSkill ? profBonus : 0)
+          passives.push(`Investigation ${passiveInvestigation}`)
+        }
+
+        const hasPassiveSenses = passives.length > 0
+
+        // Don't show section if nothing to display
+        if (!hasSkills && !hasSenses && !hasLanguages && !hasPassiveSenses) return ''
+
+        // Format skills
+        let skillsText = ''
+        if (hasSkills) {
+          if (Array.isArray(c.skills)) {
+            skillsText = c.skills.sort((a, b) => {
+              const nameA = typeof a.id === 'number' ? SKILL_NAMES[a.id] : (a.name || 'Unknown')
+              const nameB = typeof b.id === 'number' ? SKILL_NAMES[b.id] : (b.name || 'Unknown')
+              return nameA.localeCompare(nameB)
+            }).map(sk => {
+              const skillName = typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : (sk.name || 'Unknown')
+              const mod = sk.modifier || 0
+              return `${skillName} ${mod >= 0 ? '+' : ''}${mod}`
+            }).join(', ')
+          } else {
+            skillsText = typeof c.skills === 'string' ? c.skills.split(',').map(s => s.trim()).sort().join(', ') : c.skills
+          }
+        }
+
+        return `
+          <div style="margin-bottom:10px;">
+            <div onclick="toggleNotesSection('additional-stats-${c.uid}')"
+              style="display:flex;align-items:center;gap:4px;cursor:pointer;
+                     font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;margin-bottom:6px;">
+              ADDITIONAL STATS
+              <span id="additional-stats-${c.uid}-arrow" style="font-size:11px;color:#555;">▼</span>
+            </div>
+            <div id="additional-stats-${c.uid}" style="display:none;padding-left:0px;font-size:12px;color:#b8b0a0;line-height:1.6;">
+              ${skillsText ? `<div style="margin-bottom:6px;"><strong style="color:#c9a87c;">Skills:</strong> ${skillsText}</div>` : ''}
+              ${hasPassiveSenses ? `<div style="margin-bottom:6px;"><strong style="color:#c9a87c;">Passive Senses:</strong> ${passives.join(', ')}</div>` : ''}
+              ${hasSenses ? `<div style="margin-bottom:6px;"><strong style="color:#c9a87c;">Senses:</strong> ${c.senses}</div>` : ''}
+              ${hasLanguages ? `<div style="margin-bottom:6px;"><strong style="color:#c9a87c;">Languages:</strong> ${c.languages}</div>` : ''}
+            </div>
           </div>
-        </div>
-      </div>
+        `
+      })()}
 
       ${abilityBlock('TRAITS', c.traits, 'traits')}
       ${abilityBlock('ACTIONS', c.actions, 'actions')}
       ${abilityBlock('BONUS ACTIONS', c.bonusActions, 'bonus')}
       ${abilityBlock('REACTIONS', c.reactions, 'reactions')}
       ${abilityBlock('LEGENDARY ACTIONS', c.legendaryActions, 'legendary')}
+      ${abilityBlock('LAIR ACTIONS', c.lairs, 'lairs')}
       ${slotsHTML}
       ${dailySpellsHTML}
       ${knownSpellsHTML}
@@ -2422,7 +3674,7 @@ function buildCard(c, isActive) {
       <!-- Notes (collapsible) -->
       ${c.notes && c.notes.length > 0 ? `
         <div style="margin-top:12px;">
-          <div onclick="toggleTraitText('notes-${c.uid}')"
+          <div onclick="toggleNotesSection('notes-${c.uid}')"
             style="display:flex;align-items:center;gap:4px;cursor:pointer;
                    font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;margin-bottom:6px;">
             NOTES
@@ -2432,8 +3684,8 @@ function buildCard(c, isActive) {
             style="display:none;color:#b8b0a0;font-size:12px;line-height:1.5;">
             ${c.notes.map(note => `
               <div style="margin-bottom:8px;">
-                ${note.title ? `<div style="font-weight:bold;color:#4a9a9a;margin-bottom:2px;">${note.title}</div>` : ''}
-                <div style="white-space:pre-wrap;">${note.body || ''}</div>
+                ${note.title ? `<div style="font-weight:bold;color:#4a9a9a;margin-bottom:0;">${renderMarkdown(note.title)}</div>` : ''}
+                <div style="white-space:pre-line;text-indent:0;padding:0;margin:0;">${renderMarkdown(note.body || '')}</div>
               </div>
             `).join('')}
           </div>
@@ -2476,7 +3728,7 @@ function toggleAddPanel() {
     panel.style.padding = '16px'
     panel.style.overflowY = 'auto'
     panel.style.transform = 'translateX(0)'
-    if (btn) btn.textContent = 'X'
+    if (btn) btn.textContent = '×'
     if (overlay) overlay.style.display = 'block'
     renderAddPanel()
   } else {
@@ -2498,14 +3750,17 @@ function renderAddPanel() {
     ? compendiumData.monsters.filter(m => m.name.toLowerCase().includes(enc.monsterQ.toLowerCase())).slice(0, 40)
     : compendiumData.monsters.slice(0, 40)
 
+  // Store filtered list for index-based lookups
+  enc.filteredMonsters = filtered
+
   panel.innerHTML = `
     <div style="padding:14px;">
-      <div style="font-size:13px;color:#1E231A;letter-spacing:.1em;font-weight:700;
+      <div style="font-size:13px;color:#4587A2;letter-spacing:.1em;font-weight:700;
                   margin-bottom:14px;">ADD COMBATANTS</div>
 
       ${pcs.length > 0 ? `
         <div style="margin-bottom:16px;">
-          <div style="font-size:10px;color:#555;letter-spacing:.06em;
+          <div style="font-size:10px;color:#7B9BA8;letter-spacing:.06em;
                       margin-bottom:6px;font-weight:700;">PARTY</div>
           ${pcs.map(p => `
             <div onclick="addFromPC('${p.uid}')"
@@ -2513,9 +3768,9 @@ function renderAddPanel() {
                      margin-bottom:4px;cursor:pointer;font-size:12px;"
               onmouseover="this.style.borderColor='#4a9a9a'"
               onmouseout="this.style.borderColor='#1e2d4a'">
-              <span style="font-weight:bold;">${p.label || p.name}</span>
-              <span style="color:#555;margin-left:6px;font-size:11px;">
-                HP ${p.hpMax} · AC ${p.ac || '—'}</span>
+              <div style="font-weight:bold;">${p.label || p.name}</div>
+              <div style="color:#e0d5c5;font-size:11px;">
+                HP ${p.hpMax} · AC ${(p.acValue ?? p.ac) != null ? (p.acValue ?? p.ac) : '—'}</div>
             </div>
           `).join('')}
         </div>
@@ -2523,7 +3778,7 @@ function renderAddPanel() {
 
       ${npcs.length > 0 ? `
         <div style="margin-bottom:16px;">
-          <div style="font-size:10px;color:#555;letter-spacing:.06em;
+          <div style="font-size:10px;color:#7B9BA8;letter-spacing:.06em;
                       margin-bottom:6px;font-weight:700;">NPCs</div>
           ${npcs.map(p => `
             <div onclick="addFromNPC('${p.uid}')"
@@ -2531,16 +3786,16 @@ function renderAddPanel() {
                      margin-bottom:4px;cursor:pointer;font-size:12px;"
               onmouseover="this.style.borderColor='#4a9a9a'"
               onmouseout="this.style.borderColor='#1e2d4a'">
-              <span style="font-weight:bold;">${p.label || p.name}</span>
-              <span style="color:#555;margin-left:6px;font-size:11px;">
-                HP ${p.hpMax} · AC ${p.ac || '—'}</span>
+              <div style="font-weight:bold;">${p.label || p.name}</div>
+              <div style="color:#e0d5c5;font-size:11px;">
+                HP ${p.hpMax} · AC ${(p.acValue ?? p.ac) != null ? (p.acValue ?? p.ac) : '—'}</div>
             </div>
           `).join('')}
         </div>
       ` : ''}
 
       <div style="margin-bottom:16px;">
-        <div style="font-size:10px;color:#555;letter-spacing:.06em;
+        <div style="font-size:10px;color:#7B9BA8;letter-spacing:.06em;
                     margin-bottom:6px;font-weight:700;">MONSTERS</div>
         <input type="text" placeholder="Search monsters…" value="${enc.monsterQ}"
           oninput="filterEncMonsters(this.value)"
@@ -2550,25 +3805,26 @@ function renderAddPanel() {
         <div id="enc-monster-list" style="max-height:260px;overflow-y:auto;">
           ${filtered.length === 0
             ? '<p style="color:#444;font-size:12px;">No results</p>'
-            : filtered.map(m => `
-              <div id="monster-item-${m.name.replace(/[^a-zA-Z0-9]/g, '-')}"
+            : filtered.map((m, idx) => `
+              <div id="monster-item-${idx}"
+                data-monster-index="${idx}"
                 style="padding:6px 10px;border:1px solid #1e2d4a;border-radius:3px;
                        margin-bottom:3px;">
-                <div onclick="showMonsterChoice('${m.name.replace(/'/g, "\\'")}')"
+                <div onclick="showMonsterChoiceByIndex(${idx})"
                   style="cursor:pointer;"
                   onmouseover="this.parentElement.style.borderColor='#4a9a9a'"
                   onmouseout="this.parentElement.style.borderColor='#1e2d4a'">
                   <div style="font-size:12px;font-weight:bold;">${m.name}</div>
-                  <div style="font-size:11px;color:#555;">CR ${m.cr || '—'} · HP ${m.hp} · AC ${m.ac}</div>
+                  <div style="font-size:11px;color:#e0d5c5;">CR ${m.cr || '—'} · HP ${m.hp} · AC ${m.ac}</div>
                 </div>
-                <div id="monster-choice-${m.name.replace(/[^a-zA-Z0-9]/g, '-')}" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid #1e2d4a;">
-                  <button onclick="addMonsterAsIs('${m.name.replace(/'/g, "\\'")}')"
+                <div id="monster-choice-${idx}" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid #1e2d4a;">
+                  <button onclick="addMonsterAsIsByIndex(${idx})"
                     style="width:100%;background:#1a4a2a;color:#8fd9a8;border:1px solid #2a7a4a;
                            padding:5px;cursor:pointer;border-radius:3px;font-size:11px;
                            font-family:var(--app-font);margin-bottom:3px;">
                     Use As Is
                   </button>
-                  <button onclick="modifyMonster('${m.name.replace(/'/g, "\\'")}')"
+                  <button onclick="modifyMonsterByIndex(${idx})"
                     style="width:100%;background:#0f3460;color:#e0d5c5;border:1px solid #1a5a9a;
                            padding:5px;cursor:pointer;border-radius:3px;font-size:11px;
                            font-family:var(--app-font);">
@@ -2578,28 +3834,6 @@ function renderAddPanel() {
               </div>
             `).join('')}
         </div>
-      </div>
-
-      <div>
-        <div style="font-size:10px;color:#555;letter-spacing:.06em;
-                    margin-bottom:6px;font-weight:700;">CUSTOM</div>
-        <input id="custom-name" type="text" placeholder="Name"
-          style="width:100%;padding:6px 10px;background:#0a1520;border:1px solid #2a3a5a;
-                 color:#e0d5c5;font-family:var(--app-font);border-radius:3px;font-size:12px;
-                 margin-bottom:4px;box-sizing:border-box;" />
-        <div style="display:flex;gap:4px;margin-bottom:6px;">
-          <input id="custom-hp" type="number" placeholder="HP" min="1"
-            style="flex:1;padding:6px 8px;background:#0a1520;border:1px solid #2a3a5a;
-                   color:#e0d5c5;font-family:var(--app-font);border-radius:3px;font-size:12px;" />
-          <input id="custom-ac" type="number" placeholder="AC"
-            style="flex:1;padding:6px 8px;background:#0a1520;border:1px solid #2a3a5a;
-                   color:#e0d5c5;font-family:var(--app-font);border-radius:3px;font-size:12px;" />
-        </div>
-        <button onclick="addCustomCombatant()"
-          style="width:100%;background:#3E3E3D;color:#1E231A;border:none;padding:7px;
-                 cursor:pointer;border-radius:3px;font-size:12px;font-family:var(--app-font);font-weight:700;">
-          + Add Custom
-        </button>
       </div>
     </div>
   `
@@ -2612,26 +3846,31 @@ function filterEncMonsters(query) {
   const filtered = query
     ? compendiumData.monsters.filter(m => m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 40)
     : compendiumData.monsters.slice(0, 40)
+
+  // Store filtered list for lookup
+  enc.filteredMonsters = filtered
+
   list.innerHTML = filtered.length === 0
     ? '<p style="color:#444;font-size:12px;">No results</p>'
-    : filtered.map(m => `
-        <div id="monster-item-${m.name.replace(/[^a-zA-Z0-9]/g, '-')}"
+    : filtered.map((m, idx) => `
+        <div id="monster-item-${idx}"
+          data-monster-index="${idx}"
           style="padding:6px 10px;border:1px solid #1e2d4a;border-radius:3px;margin-bottom:3px;">
-          <div onclick="showMonsterChoice('${m.name.replace(/'/g, "\\'")}')"
+          <div onclick="showMonsterChoiceByIndex(${idx})"
             style="cursor:pointer;"
             onmouseover="this.parentElement.style.borderColor='#4a9a9a'"
             onmouseout="this.parentElement.style.borderColor='#1e2d4a'">
             <div style="font-size:12px;font-weight:bold;">${m.name}</div>
             <div style="font-size:11px;color:#555;">CR ${m.cr || '—'} · HP ${m.hp} · AC ${m.ac}</div>
           </div>
-          <div id="monster-choice-${m.name.replace(/[^a-zA-Z0-9]/g, '-')}" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid #1e2d4a;">
-            <button onclick="addMonsterAsIs('${m.name.replace(/'/g, "\\'")}')"
+          <div id="monster-choice-${idx}" style="display:none;margin-top:6px;padding-top:6px;border-top:1px solid #1e2d4a;">
+            <button onclick="addMonsterAsIsByIndex(${idx})"
               style="width:100%;background:#1a4a2a;color:#8fd9a8;border:1px solid #2a7a4a;
                      padding:5px;cursor:pointer;border-radius:3px;font-size:11px;
                      font-family:var(--app-font);margin-bottom:3px;">
               Use As Is
             </button>
-            <button onclick="modifyMonster('${m.name.replace(/'/g, "\\'")}')"
+            <button onclick="modifyMonsterByIndex(${idx})"
               style="width:100%;background:#0f3460;color:#e0d5c5;border:1px solid #1a5a9a;
                      padding:5px;cursor:pointer;border-radius:3px;font-size:11px;
                      font-family:var(--app-font);">
@@ -2656,7 +3895,7 @@ function startCombat() {
   const btn = document.getElementById('btn-start-next')
   const e = document.getElementById('btn-end-combat')
   if (btn) {
-    btn.textContent = '⏭ Next Turn'
+    btn.textContent = '⏭ Next'
     btn.onclick = nextTurn
   }
   if (e) { e.disabled = false; e.style.color = '#e08080'; e.style.background = '#2a0000'; e.style.border = '1px solid #6a0000'; e.style.cursor = 'pointer' }
@@ -2668,10 +3907,35 @@ function nextTurn() {
   if (!enc.inCombat || !enc.current) return
   const count = enc.current.combatants.length
   if (count === 0) return
-  enc.turn = (enc.turn + 1) % count
-  if (enc.turn === 0) {
-    enc.round++
+
+  // Get sorted combatants by initiative
+  const sorted = [...enc.current.combatants].sort((a, b) => b.initiative - a.initiative)
+
+  // Helper to check if combatant should be skipped
+  const shouldSkip = (c) => {
+    // Skip if: HP is 0 or less, AND (not a PC, AND not an ally)
+    return c.hpCurrent <= 0 && !c.isPC && c.isEnemy !== false
   }
+
+  // Try to advance turn, skipping dead enemies
+  let attempts = 0
+  let nextIndex
+  do {
+    enc.turn = (enc.turn + 1) % count
+    if (enc.turn === 0) {
+      enc.round++
+    }
+    nextIndex = enc.turn
+    attempts++
+
+    // If we've checked all combatants and all are dead/skippable, stop
+    if (attempts > count) {
+      // All combatants are down - stay on current turn
+      showToast('All combatants are down')
+      break
+    }
+  } while (shouldSkip(sorted[nextIndex]))
+
   refreshInitSidebar()
   refreshCards()
 }
@@ -2683,7 +3947,7 @@ function endCombat() {
   const btn = document.getElementById('btn-start-next')
   const e = document.getElementById('btn-end-combat')
   if (btn) {
-    btn.textContent = '▶ Start Combat'
+    btn.textContent = '▶ Start'
     btn.onclick = startCombat
   }
   if (e) { e.disabled = true; e.style.color = '#444'; e.style.background = '#262F35'; e.style.border = '1px solid #2a3a5a'; e.style.cursor = 'not-allowed' }
@@ -2699,39 +3963,162 @@ function makeCombatantUid() {
 function addFromPC(uid) {
   const pc = compendiumData.players.find(p => p.uid === uid)
   if (!pc) return
+
+  // Parse class from classInfo if needed (for XML imports)
+  let pcClass = pc.class || pc._draft?.class || ''
+  if (!pcClass && pc.classInfo) {
+    // Parse "Race Class (Subclass)" format
+    const parts = pc.classInfo.trim().split(/\s+/)
+    if (parts.length > 1) {
+      // Skip first word (race) and take the rest as class
+      pcClass = parts.slice(1).join(' ')
+    }
+  }
+
+  // Build spell slots from PC data
   let spellSlots = null
-  if (pc.slots) {
+  if (pc.spellSlots && Array.isArray(pc.spellSlots)) {
+    // PC Builder format: array of numbers [3, 0, 0, ...]
+    spellSlots = pc.spellSlots
+      .map((total, i) => ({ level: i + 1, total: parseInt(total) || 0, used: 0 }))
+      .filter(slot => slot.total > 0)
+  } else if (pc.slots) {
+    // XML format: comma-separated string
     const nums = pc.slots.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n > 0)
     if (nums.length > 0) spellSlots = nums.map((total, i) => ({ level: i + 1, total, used: 0 }))
   }
+  // Build abilities array - try multiple sources
+  let abilities
+  if (Array.isArray(pc.abilities) && pc.abilities.length === 6) {
+    abilities = pc.abilities
+  } else if (pc.str !== undefined || pc._draft?.str !== undefined) {
+    // Build from individual ability fields (builder format)
+    const src = pc._draft || pc
+    abilities = [
+      String(src.str ?? 10),
+      String(src.dex ?? 10),
+      String(src.con ?? 10),
+      String(src.int ?? 10),
+      String(src.wis ?? 10),
+      String(src.cha ?? 10)
+    ]
+  } else {
+    abilities = ['10','10','10','10','10','10']
+  }
+
+  // Get HP - try multiple sources (PC Builder stores in hpMax)
+  const hpMax = parseInt(pc.hpMax ?? pc.hpValue ?? pc._draft?.hpValue ?? pc._draft?.hpMax) || 1
+  const hpCurrent = parseInt(pc.hpCurrent ?? pc.hpValue ?? pc._draft?.hpValue ?? pc._draft?.hpMax ?? hpMax) || hpMax
+
+  // Get AC - PC Builder stores in acValue, XML imports use ac
+  const ac = parseInt(pc.acValue ?? pc.ac ?? pc._draft?.acValue ?? pc._draft?.ac) || undefined
+
   const pcTraits = (pc.traits || []).map(t => {
-    const inferred = (t.charges === null && t.recharge === null) ? parseUsesFromName(t.name) : {}
-    const charges = t.charges !== null ? t.charges : (inferred.charges ?? null)
-    const recharge = t.recharge !== null ? t.recharge : (inferred.recharge ?? null)
-    return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+    // Copy charges/chargesCurrent directly if present (PC Builder format)
+    let charges = t.charges ?? null
+    let chargesCurrent = t.chargesCurrent ?? null
+    let recharge = t.recharge ?? null
+
+    // Fall back to limitedUsage if charges not present
+    if (charges === null && t.limitedUsage) {
+      const lu = t.limitedUsage
+      if (lu.type === 'per_day' || lu.type === 'charges') {
+        charges = lu.count || null
+        chargesCurrent = lu.count || null
+      }
+      if (lu.type === 'recharge_5_6') recharge = 5
+      else if (lu.type === 'recharge_6') recharge = 6
+      else if (lu.type?.startsWith('recharge_')) {
+        const match = lu.type.match(/recharge_(\d+)/)
+        if (match) recharge = parseInt(match[1])
+      }
+    }
+
+    // Final fallback: parse from name
+    if (charges === null && recharge === null) {
+      const inferred = parseUsesFromName(t.name)
+      charges = inferred.charges ?? null
+      recharge = inferred.recharge ?? null
+      chargesCurrent = chargesCurrent ?? charges
+    }
+
+    // Normalize field name: PC traits may have .desc (PC builder) or .text (XML import)
+    // Combatant card renderer expects .text
+    return { ...t, text: t.text || t.desc || '', charges, recharge, chargesCurrent }
   })
+
   enc.current.combatants.push({
     uid: makeCombatantUid(),
     name: pc.label || pc.name,
-    type: 'PC',
+    type: pc.race || pc.type || 'Humanoid',
+    race: pc.race || pc.type || 'Humanoid',
+    class: pcClass,
+    subclass: pc.subclass || pc._draft?.subclass || '',
+    size: pc.size || '',
     isPC: true,
     isEnemy: false,
     level: pc.level || 1,
     initiative: 0,
-    ac: pc.ac,
+    ac: ac,
     speed: pc.speed,
-    hpMax: parseInt(pc.hpMax) || 1,
-    hpCurrent: parseInt(pc.hpCurrent) || parseInt(pc.hpMax) || 1,
+    hpMax: hpMax,
+    hpCurrent: hpCurrent,
+    str: parseInt(abilities[0]) || 10,
+    dex: parseInt(abilities[1]) || 10,
+    con: parseInt(abilities[2]) || 10,
+    int: parseInt(abilities[3]) || 10,
+    wis: parseInt(abilities[4]) || 10,
+    cha: parseInt(abilities[5]) || 10,
     conditions: [],
+    abilities: abilities,
     traits: pcTraits,
     actions: (pc.actions || []).map(a => {
-      const inferred = parseUsesFromName(a.name)
-      return { name: a.name, text: a.text, charges: inferred.charges, chargesCurrent: inferred.charges, recharge: inferred.recharge }
+      // Copy charges/chargesCurrent directly if present (PC Builder format)
+      let charges = a.charges ?? null
+      let chargesCurrent = a.chargesCurrent ?? null
+      let recharge = a.recharge ?? null
+
+      // Fall back to limitedUsage if charges not present
+      if (charges === null && a.limitedUsage) {
+        const lu = a.limitedUsage
+        if (lu.type === 'per_day' || lu.type === 'charges') {
+          charges = lu.count || null
+          chargesCurrent = lu.count || null
+        }
+        if (lu.type === 'recharge_5_6') recharge = 5
+        else if (lu.type === 'recharge_6') recharge = 6
+        else if (lu.type?.startsWith('recharge_')) {
+          const match = lu.type.match(/recharge_(\d+)/)
+          if (match) recharge = parseInt(match[1])
+        }
+      }
+
+      // Final fallback: parse from name
+      if (charges === null && recharge === null) {
+        const inferred = parseUsesFromName(a.name)
+        charges = inferred.charges ?? null
+        recharge = inferred.recharge ?? null
+        chargesCurrent = chargesCurrent ?? charges
+      }
+
+      return { name: a.name, text: a.text, charges, chargesCurrent, recharge }
     }),
     spellSlots,
     dailySpells: parseDailySpells(pcTraits),
     spells: pc.spells || [],
+    selectedSpells: pc.selectedSpells || [],
+    spellcastingType: pc.spellcastingType || null,
+    spellAttackMod: pc.spellAttackMod ?? null,
+    spellSaveDC: pc.spellSaveDC ?? null,
     portrait: pc.portrait || null,
+    notes: pc.notes || [],
+    skills: pc.skills || [],
+    savingThrows: pc.savingThrows || [],
+    senses: pc.senses || '',
+    languages: pc.languages || '',
+    passive: pc.passive || '',
+    passiveInsight: pc.passiveInsight ?? null,
+    passiveInvestigation: pc.passiveInvestigation ?? null,
   })
   refreshInitSidebar()
   refreshCards()
@@ -2752,10 +4139,39 @@ function addFromNPC(uid) {
     return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null }
   })
   const initRoll = Math.floor(Math.random() * 20) + 1
+  const abilities = Array.isArray(npc.abilities) ? npc.abilities : [10,10,10,10,10,10]
+
+  // Convert NPC spell name strings to full spell objects
+  const selectedSpells = (npc.spells || []).map(s => {
+    if (typeof s === 'string') {
+      // Look up full spell object from compendium
+      const fullSpell = compendiumData.spells.find(sp => sp.name === s)
+      if (fullSpell) {
+        const spell = {
+          name: fullSpell.name,
+          level: fullSpell.level,
+          text: fullSpell.text || fullSpell.desc || '',
+          time: fullSpell.time || '',
+          range: fullSpell.range || '',
+          duration: fullSpell.duration || ''
+        }
+        // For cantrips, mark as at-will; for leveled spells, use spell slots (no extra fields needed)
+        if (fullSpell.level === '0') {
+          spell.atWill = true
+        }
+        return spell
+      } else {
+        return { name: s, level: '0', atWill: true, text: '' }
+      }
+    }
+    return s // Already an object, use as-is
+  })
+
   enc.current.combatants.push({
     uid: makeCombatantUid(),
     name: npc.label || npc.name,
-    type: 'NPC',
+    type: npc.type || 'Humanoid',
+    size: npc.size || '',
     isPC: false,
     isEnemy: true,
     cr: npc.cr || '0',
@@ -2764,22 +4180,72 @@ function addFromNPC(uid) {
     speed: npc.speed,
     hpMax: parseInt(npc.hpMax) || 1,
     hpCurrent: parseInt(npc.hpCurrent) || parseInt(npc.hpMax) || 1,
+    str: parseInt(abilities[0]) || parseInt(npc.str) || 10,
+    dex: parseInt(abilities[1]) || parseInt(npc.dex) || 10,
+    con: parseInt(abilities[2]) || parseInt(npc.con) || 10,
+    int: parseInt(abilities[3]) || parseInt(npc.int) || 10,
+    wis: parseInt(abilities[4]) || parseInt(npc.wis) || 10,
+    cha: parseInt(abilities[5]) || parseInt(npc.cha) || 10,
     conditions: [],
     traits: npcTraits,
     actions: (npc.actions || []).map(a => {
-      const inferred = parseUsesFromName(a.name)
-      return { name: a.name, text: a.text, charges: inferred.charges, chargesCurrent: inferred.charges, recharge: inferred.recharge }
+      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+      return {
+        ...a,
+        charges,
+        recharge,
+        chargesCurrent: charges !== null ? charges : null
+      }
     }),
     spellSlots,
     dailySpells: parseDailySpells(npcTraits),
     spells: npc.spells || [],
+    selectedSpells: selectedSpells,
     portrait: npc.portrait || npc._draft?.portrait || null,
+    notes: npc.notes || [],
+    skills: npc.skills || [],
+    savingThrows: npc.savingThrows || [],
+    senses: npc.senses || '',
+    languages: npc.languages || '',
   })
   showToast(`${npc.label || npc.name} added — initiative: ${initRoll}`)
   refreshInitSidebar()
   refreshCards()
 }
 
+// Index-based functions to avoid quote escaping issues
+function showMonsterChoiceByIndex(idx) {
+  const filtered = enc.filteredMonsters || compendiumData.monsters.slice(0, 40)
+  const m = filtered[idx]
+  if (!m) return
+  // Hide all other open choices
+  document.querySelectorAll('[id^="monster-choice-"]').forEach(el => {
+    el.style.display = 'none'
+  })
+  // Show this choice
+  const choice = document.getElementById(`monster-choice-${idx}`)
+  if (choice) {
+    choice.style.display = choice.style.display === 'none' ? 'block' : 'none'
+  }
+}
+
+function addMonsterAsIsByIndex(idx) {
+  const filtered = enc.filteredMonsters || compendiumData.monsters.slice(0, 40)
+  const m = filtered[idx]
+  if (!m) return
+  addMonsterAsIs(m.name)
+}
+
+function modifyMonsterByIndex(idx) {
+  const filtered = enc.filteredMonsters || compendiumData.monsters.slice(0, 40)
+  const m = filtered[idx]
+  if (!m) return
+  modifyMonster(m.name)
+}
+
+// Legacy function - keep for backwards compatibility
 function showMonsterChoice(name) {
   // Hide all other open choices
   document.querySelectorAll('[id^="monster-choice-"]').forEach(el => {
@@ -2809,10 +4275,54 @@ function addMonsterAsIs(name) {
     const recharge = t.recharge !== null ? t.recharge : (inferred.recharge ?? null)
     return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null }
   })
+  // Build abilities array for consistency with PCs/NPCs
+  const abilities = [
+    String(parseInt(m.str) || 10),
+    String(parseInt(m.dex) || 10),
+    String(parseInt(m.con) || 10),
+    String(parseInt(m.int) || 10),
+    String(parseInt(m.wis) || 10),
+    String(parseInt(m.cha) || 10)
+  ]
+
+  // Enrich selectedSpells with full spell data from compendium
+  const rawSelectedSpells = m.selectedSpells || m._draft?.selectedSpells || parseMonsterSpells(m.spells, traits, m.actions) || []
+  const selectedSpells = rawSelectedSpells.map(spell => {
+    const fullSpell = compendiumData.spells.find(sp => sp.name === spell.name)
+    const enriched = {
+      ...(fullSpell || {}),
+      ...spell,
+      text: fullSpell?.text || fullSpell?.desc || spell.text || '',
+      time: fullSpell?.time || spell.time || '',
+      range: fullSpell?.range || spell.range || '',
+      duration: fullSpell?.duration || spell.duration || ''
+    }
+
+    // Convert monster builder format to rendering format
+    if (spell.usage === 'atwill') {
+      enriched.atWill = true
+      delete enriched.usage
+      delete enriched.dailyCount
+    } else if (spell.usage === 'daily') {
+      enriched.usesMax = spell.dailyCount || 1
+      enriched.usesCurrent = spell.dailyCount || 1
+      enriched.perDay = true
+      delete enriched.usage
+      delete enriched.dailyCount
+    } else if (spell.usage === 'slot') {
+      // Slot-based spells don't need special tracking fields
+      delete enriched.usage
+      delete enriched.dailyCount
+    }
+
+    return enriched
+  })
+
   enc.current.combatants.push({
     uid: makeCombatantUid(),
     name: m.name,
-    type: 'Monster',
+    type: m.type || 'Humanoid',
+    size: m.size || '',
     isPC: false,
     isEnemy: true,
     cr: m.cr || '0',
@@ -2821,6 +4331,13 @@ function addMonsterAsIs(name) {
     speed: m.speed,
     hpMax: hpNum,
     hpCurrent: hpNum,
+    str: parseInt(m.str) || 10,
+    dex: parseInt(m.dex) || 10,
+    con: parseInt(m.con) || 10,
+    int: parseInt(m.int) || 10,
+    wis: parseInt(m.wis) || 10,
+    cha: parseInt(m.cha) || 10,
+    abilities: abilities,
     conditions: [],
     traits,
     actions: (m.actions || []).map(a => {
@@ -2829,10 +4346,39 @@ function addMonsterAsIs(name) {
       const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
       return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
     }),
+    bonusActions: (m.bonusActions || []).map(a => {
+      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+    }),
+    reactions: (m.reactions || []).map(a => {
+      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+    }),
+    legendaryActions: (m.legendaryActions || []).map(a => {
+      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+    }),
+    lairs: (m.lairActions || []).map(a => {
+      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+    }),
     spellSlots,
     dailySpells: parseDailySpells(traits),
     spells: parseMonsterSpells(m.spells, traits, m.actions),
+    selectedSpells: selectedSpells,
     portrait: m.portrait || null,
+    skills: m.skill || m.skills || '',
+    savingThrows: m.save || m.savingThrows || '',
+    senses: m.senses || '',
+    languages: m.languages || '',
   })
   showToast(`${m.name} added — initiative: ${initRoll}`)
   refreshInitSidebar()
@@ -2893,14 +4439,16 @@ function toggleAllyEnemy(uid) {
 
 function removeCombatant(uid) {
   if (!enc.current) return
-  enc.current.combatants = enc.current.combatants.filter(c => c.uid !== uid)
-  if (enc.inCombat) {
-    const count = enc.current.combatants.length
-    if (count === 0) { endCombat(); return }
-    if (enc.turn >= count) enc.turn = 0
-  }
-  refreshInitSidebar()
-  refreshCards()
+  confirmDelete('Remove from encounter?', () => {
+    enc.current.combatants = enc.current.combatants.filter(c => c.uid !== uid)
+    if (enc.inCombat) {
+      const count = enc.current.combatants.length
+      if (count === 0) { endCombat(); return }
+      if (enc.turn >= count) enc.turn = 0
+    }
+    refreshInitSidebar()
+    refreshCards()
+  })
 }
 
 function setInit(uid, value) {
@@ -3009,11 +4557,11 @@ function adjustSlot(uid, slotIdx, delta) {
   refreshCards()
 }
 
-function adjustCombatantSpellUse(uid, idx, delta) {
+function adjustCombatantSpellUse(uid, spellName, delta) {
   const c = enc.current?.combatants.find(x => x.uid === uid)
-  if (!c || !c.spells || !c.spells[idx]) return
-  const spell = c.spells[idx]
-  if (spell.usesMax == null) return
+  if (!c || !c.selectedSpells) return
+  const spell = c.selectedSpells.find(s => s.name === spellName)
+  if (!spell || spell.usesMax == null) return
   spell.usesCurrent = Math.max(0, Math.min(spell.usesMax, spell.usesCurrent + delta))
   refreshCards()
 }
@@ -3269,11 +4817,14 @@ function createNewCampaign() {
     compendiumData.campaigns = {}
   }
 
-  // Create new campaign
+  // Create new campaign with ALL required fields
   compendiumData.campaigns[name] = {
     players: [],
     npcs: [],
-    adventures: []
+    adventures: [],
+    encounters: [],
+    notes: [],
+    treasure: []
   }
 
   // Set as active campaign
@@ -3287,7 +4838,11 @@ function createNewCampaign() {
   // Show toast
   showToast(`Campaign "${name}" created`)
 
-  // Re-render to update UI
+  // Close Settings modal
+  const settingsModal = document.getElementById('settings-modal')
+  if (settingsModal) settingsModal.remove()
+
+  // Re-render to update UI and go to home
   render()
   showSection('home')
 }
@@ -3298,11 +4853,12 @@ function cancelNewCampaign() {
 
   container.innerHTML = `
     <button onclick="showNewCampaignForm()"
-      style="background:#1E231A;color:#909090;border:2px solid #445E22;
-             padding:4px 10px;cursor:pointer;border-radius:4px;font-size:11px;
-             font-family:var(--app-font);white-space:nowrap;font-weight:700;"
-      onmouseover="this.style.borderColor='#4a9a9a';this.style.background='#2a3a2a'"
-      onmouseout="this.style.borderColor='#445E22';this.style.background='#1E231A'">
+      style="display:block;width:100%;background:#262F35;border:1px solid #2a3a5a;
+             color:#e0d5c5;padding:10px 16px;margin-bottom:8px;cursor:pointer;
+             font-size:13px;text-align:left;font-family:var(--app-font);
+             border-radius:4px;transition:background .15s,border-color .15s;"
+      onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+      onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
       + New Campaign
     </button>
   `
@@ -3399,7 +4955,11 @@ function confirmRenameCampaign() {
     // Show toast
     showToast(`Campaign renamed to "${newName}"`)
 
-    // Re-render to update UI
+    // Close Settings modal
+    const settingsModal = document.getElementById('settings-modal')
+    if (settingsModal) settingsModal.remove()
+
+    // Re-render to update UI and go to home
     render()
     showSection('home')
   }
@@ -3412,55 +4972,253 @@ function cancelRenameCampaign() {
 }
 
 // ── Monsters ──────────────────────────────────────────────────────
+// Monster filter state
+let monsterFilters = {
+  query: '',
+  cr: '',
+  type: '',
+  homebrew: '',
+  thirdParty: '',
+  environment: '',
+  spellcaster: ''
+}
+
 function renderMonsters(container) {
-  if (compendiumData.monsters.length === 0) {
-    container.innerHTML = `
-      <p style="color:#555;margin-bottom:16px;">No monsters loaded. Import your compendium XML to get started.</p>
-      <button onclick="importXML()"
-        style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:9px 18px;
-               cursor:pointer;border-radius:4px;font-size:13px;font-family:var(--app-font);">
-        Import Compendium XML
-      </button>
-    `
-    return
-  }
+  // Get unique types from actual data, normalized and deduplicated
+  const uniqueTypes = [...new Set(compendiumData.monsters
+    .map(m => m.type || '')
+    .filter(t => {
+      // Filter out garbage: empty strings, single chars, special codes like "$"
+      if (!t || t.length <= 1) return false
+      if (t === '$' || /^[A-Z]{1,3}$/.test(t)) return false
+      return true
+    })
+    .map(t => {
+      // Normalize to title case for deduplication (with proper article/preposition handling)
+      const lowercase = ['of', 'the', 'a', 'an', 'in', 'from', 'with', 'and', 'or', 'but', 'for', 'to', 'at', 'by', 'on']
+      return t.split(' ').map((word, index) => {
+        if (!word) return word
+        const lower = word.toLowerCase()
+        // First word is always capitalized
+        if (index === 0) return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        // Keep articles/prepositions lowercase
+        if (lowercase.includes(lower)) return lower
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      }).join(' ')
+    })
+  )].sort()
+
+  const filterStyle = `background:#1A1C1E;border:1px solid #2E2F2D;color:#e0d5c5;
+    font-family:var(--app-font);padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;`
+
+  const hasActiveFilters = monsterFilters.query || monsterFilters.cr || monsterFilters.type ||
+    monsterFilters.homebrew || monsterFilters.thirdParty || monsterFilters.environment || monsterFilters.spellcaster
+
   container.innerHTML = `
-    <input id="monster-search" type="text" placeholder="Search monsters…"
-      style="width:100%;max-width:500px;padding:8px 12px;margin-bottom:16px;background:#5C5C5C;
-             border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-             border-radius:4px;font-size:14px;display:block;"
-      oninput="filterMonsters(this.value)" />
+    <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;">
+      <input id="monster-search" type="text" placeholder="Search monsters…" value="${monsterFilters.query}"
+        style="flex:1;max-width:500px;padding:8px 12px;background:#5C5C5C;
+               border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
+               border-radius:4px;font-size:14px;"
+        oninput="monsterFilters.query=this.value;applyMonsterFilters()" />
+      <button onclick="openMonsterBuilder(null)"
+        style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:8px 16px;
+               cursor:pointer;border-radius:4px;font-size:13px;font-family:var(--app-font);
+               white-space:nowrap;"
+        onmouseover="this.style.borderColor='#4a9a9a';this.style.color='#e0d5c5'"
+        onmouseout="this.style.borderColor='#445E22';this.style.color='#909090'">
+        + Create Monster
+      </button>
+    </div>
+
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+      <select onchange="monsterFilters.cr=this.value;applyMonsterFilters()" style="${filterStyle}">
+        <option value="">All CRs</option>
+        ${['0','1/8','1/4','1/2','1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30']
+          .map(cr => `<option value="${cr}" ${monsterFilters.cr === cr ? 'selected' : ''}>${cr}</option>`).join('')}
+      </select>
+
+      <select onchange="monsterFilters.type=this.value;applyMonsterFilters()" style="${filterStyle}">
+        <option value="">All Types</option>
+        ${uniqueTypes.map(type => `<option value="${type}" ${monsterFilters.type === type ? 'selected' : ''}>${type}</option>`).join('')}
+      </select>
+
+      <select onchange="monsterFilters.environment=this.value;applyMonsterFilters()" style="${filterStyle}">
+        <option value="">All Environments</option>
+        ${['Arctic','Coastal','Desert','Forest','Grassland','Hill','Mountain','Swamp','Underdark','Underwater','Urban']
+          .map(env => `<option value="${env}" ${monsterFilters.environment === env ? 'selected' : ''}>${env}</option>`).join('')}
+      </select>
+
+      ${threeStateToggle('homebrew', 'Homebrew')}
+      ${threeStateToggle('thirdParty', 'Third Party')}
+      ${threeStateToggle('spellcaster', 'Spellcaster')}
+
+      <button id="clear-monster-filters" onclick="clearMonsterFilters()"
+        style="background:#5C5C5C;color:#1E231A;border:4px solid #2E2F2D;padding:7px 14px;
+               border-radius:4px;font-family:var(--app-font);font-size:13px;font-weight:bold;
+               ${hasActiveFilters ? 'cursor:pointer;opacity:1;' : 'cursor:not-allowed;opacity:0.4;pointer-events:none;'}">
+        Clear Filters
+      </button>
+    </div>
+
     <div id="monster-grid"
       style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
     </div>
   `
-  renderMonsterGrid(compendiumData.monsters)
+  applyMonsterFilters()
 }
 
+function applyMonsterFilters() {
+  let filtered = compendiumData.monsters
+
+  // Text search
+  if (monsterFilters.query) {
+    const q = monsterFilters.query.toLowerCase()
+    filtered = filtered.filter(m => m.name.toLowerCase().includes(q))
+  }
+
+  // CR filter
+  if (monsterFilters.cr) {
+    filtered = filtered.filter(m => m.cr === monsterFilters.cr)
+  }
+
+  // Type filter (partial match for subtypes)
+  if (monsterFilters.type) {
+    filtered = filtered.filter(m => {
+      const type = (m.type || '').toLowerCase()
+      return type.includes(monsterFilters.type.toLowerCase())
+    })
+  }
+
+  // Homebrew and Third Party filters (OR logic when both active)
+  const homebrewActive = monsterFilters.homebrew === 'homebrew'
+  const homebrewExclude = monsterFilters.homebrew === 'non-homebrew'
+  const thirdPartyActive = monsterFilters.thirdParty === 'third-party'
+  const thirdPartyExclude = monsterFilters.thirdParty === 'non-third-party'
+
+  if (homebrewActive && thirdPartyActive) {
+    // Both active: show entries that are EITHER homebrew OR third party
+    filtered = filtered.filter(m => (m._draft?.homebrew || m.homebrew) || (m._draft?.thirdParty || m.thirdParty))
+  } else if (homebrewActive) {
+    // Only homebrew active
+    filtered = filtered.filter(m => m._draft?.homebrew || m.homebrew)
+  } else if (thirdPartyActive) {
+    // Only third party active
+    filtered = filtered.filter(m => m._draft?.thirdParty || m.thirdParty)
+  } else if (homebrewExclude && thirdPartyExclude) {
+    // Both exclude: show entries that are NEITHER homebrew NOR third party
+    filtered = filtered.filter(m => !(m._draft?.homebrew || m.homebrew) && !(m._draft?.thirdParty || m.thirdParty))
+  } else if (homebrewExclude) {
+    // Only homebrew exclude
+    filtered = filtered.filter(m => !(m._draft?.homebrew || m.homebrew))
+  } else if (thirdPartyExclude) {
+    // Only third party exclude
+    filtered = filtered.filter(m => !(m._draft?.thirdParty || m.thirdParty))
+  }
+
+  // Environment filter
+  if (monsterFilters.environment) {
+    filtered = filtered.filter(m => {
+      const envs = m.environments || m.environment
+      if (!envs) return false
+      if (Array.isArray(envs)) {
+        return envs.includes(monsterFilters.environment)
+      }
+      return (envs || '').includes(monsterFilters.environment)
+    })
+  }
+
+  // Spellcaster filter
+  if (monsterFilters.spellcaster === 'spellcaster') {
+    filtered = filtered.filter(m => {
+      // Has spells array
+      if (m.spells && m.spells.length > 0) return true
+      // Has spell slots
+      if (m.slots && m.slots.split(',').some(s => parseInt(s) > 0)) return true
+      // Has Spellcasting trait/action
+      const hasSpellcastingTrait = (m.traits || []).some(t => /spellcast/i.test(t.name))
+      const hasSpellcastingAction = (m.actions || []).some(a => /spellcast/i.test(a.name))
+      return hasSpellcastingTrait || hasSpellcastingAction
+    })
+  } else if (monsterFilters.spellcaster === 'non-spellcaster') {
+    filtered = filtered.filter(m => {
+      if (m.spells && m.spells.length > 0) return false
+      if (m.slots && m.slots.split(',').some(s => parseInt(s) > 0)) return false
+      const hasSpellcastingTrait = (m.traits || []).some(t => /spellcast/i.test(t.name))
+      const hasSpellcastingAction = (m.actions || []).some(a => /spellcast/i.test(a.name))
+      return !hasSpellcastingTrait && !hasSpellcastingAction
+    })
+  }
+
+  renderMonsterGrid(filtered)
+
+  // Update Clear Filters button state dynamically
+  const clearBtn = document.getElementById('clear-monster-filters')
+  if (clearBtn) {
+    const hasActive = monsterFilters.query || monsterFilters.cr ||
+      monsterFilters.type || monsterFilters.homebrew ||
+      monsterFilters.thirdParty || monsterFilters.environment ||
+      monsterFilters.spellcaster
+    clearBtn.style.opacity = hasActive ? '1' : '0.4'
+    clearBtn.style.pointerEvents = hasActive ? 'auto' : 'none'
+    clearBtn.style.cursor = hasActive ? 'pointer' : 'not-allowed'
+  }
+}
+
+function clearMonsterFilters() {
+  monsterFilters = {
+    query: '',
+    cr: '',
+    type: '',
+    homebrew: '',
+    thirdParty: '',
+    environment: '',
+    spellcaster: ''
+  }
+  const searchInput = document.getElementById('monster-search')
+  if (searchInput) searchInput.value = ''
+  renderMonsters(document.getElementById('content'))
+}
+// Ensure function is accessible from inline onclick handlers
+window.clearMonsterFilters = clearMonsterFilters
+
 function filterMonsters(query) {
-  renderMonsterGrid(compendiumData.monsters.filter(m =>
-    m.name.toLowerCase().includes(query.toLowerCase())
-  ))
+  // Legacy function - now redirects to new filter system
+  monsterFilters.query = query
+  applyMonsterFilters()
 }
 
 function renderMonsterGrid(monsters) {
   const grid = document.getElementById('monster-grid')
   if (!grid) return
+  if (compendiumData.monsters.length === 0) {
+    grid.innerHTML = '<p style="color:#e0d5c5;grid-column:1/-1;">No monsters loaded. Import your compendium data or create a new monster now!</p>'
+    return
+  }
   if (monsters.length === 0) {
     grid.innerHTML = '<p style="color:#555;grid-column:1/-1;">No monsters match that search.</p>'
     return
   }
-  grid.innerHTML = monsters.map(m => `
+  grid.innerHTML = monsters.map(m => {
+    const displaySize = expandSize(m.size)
+    const isHomebrew = m._draft?.homebrew || m.homebrew
+    const isThirdParty = m._draft?.thirdParty || m.thirdParty
+    return `
     <div onclick="showMonster(decodeURIComponent(this.dataset.name))" data-name="${encodeURIComponent(m.name)}"
       style="background:#262F35;border:1px solid #1e2d4a;padding:12px;border-radius:4px;cursor:pointer;"
       onmouseover="this.style.borderColor='#4a9a9a'" onmouseout="this.style.borderColor='#1e2d4a'">
-      <div style="font-weight:bold;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#4587A2;">
+      <div style="font-weight:bold;margin-bottom:4px;color:#7B9BA8;">
         ${m.name}
       </div>
-      <div style="font-size:12px;color:#666;">${m.size} ${m.type}</div>
-      <div style="font-size:12px;color:#666;">CR ${m.cr || '—'}</div>
+      <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:4px;">
+        ${isHomebrew ? `<span style="background:#4a9a9a;color:#e0d5c5;font-size:9px;
+          padding:2px 5px;border-radius:2px;letter-spacing:.06em;font-weight:700;">HOMEBREW</span>` : ''}
+        ${isThirdParty ? `<span style="background:#3a5a7a;color:#e0d5c5;font-size:9px;
+          padding:2px 5px;border-radius:2px;letter-spacing:.06em;font-weight:700;">3RD PARTY</span>` : ''}
+      </div>
+      <div style="font-size:12px;color:#C8C8C8;">CR ${m.cr || '—'} · ${displaySize} ${m.type}</div>
     </div>
-  `).join('')
+  `}).join('')
 }
 
 function showMonster(name, skipHistory = false) {
@@ -3508,14 +5266,13 @@ function buildMonsterDetailCard(m) {
       <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">${title}</div>
       ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;">
-        ${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${it.text||''}</div>`).join('')}
+        ${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${renderMarkdown(it.text||'')}</div>`).join('')}
     </div>`
   }
   const abs = [['STR','str'],['DEX','dex'],['CON','con'],['INT','int'],['WIS','wis'],['CHA','cha']]
   // Check for homebrew/third-party flags from _draft or direct properties
   const isHomebrew = m._draft?.homebrew || m.homebrew
   const isThirdParty = m._draft?.thirdParty || m.thirdParty
-  console.log('[buildMonsterDetailCard]', m.name, 'homebrew:', isHomebrew, 'thirdParty:', isThirdParty, '_draft:', m._draft)
 
   return `
     <div style="background:#262F35;border:none;border-radius:6px;
@@ -3526,14 +5283,19 @@ function buildMonsterDetailCard(m) {
                border-radius:50%;object-fit:cover;border:2px solid #4587A2;">
         ` : ''}
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;${m.portrait ? 'padding-right:70px;' : ''}">
-          <div style="font-size:22px;font-weight:bold;">${m.name}</div>
+          <div style="font-size:22px;font-weight:bold;color:#7B9BA8;">${m.name}</div>
           ${isHomebrew ? `<span style="background:#4a9a9a;color:#e0d5c5;font-size:10px;
             padding:3px 8px;border-radius:3px;letter-spacing:.06em;font-weight:700;">HOMEBREW</span>` : ''}
           ${isThirdParty ? `<span style="background:#3a5a7a;color:#e0d5c5;font-size:10px;
             padding:3px 8px;border-radius:3px;letter-spacing:.06em;font-weight:700;">3RD PARTY</span>` : ''}
         </div>
         <div style="font-size:13px;color:#888;font-style:italic;">
-          ${[m.size,m.type,m.alignment].filter(Boolean).join(' · ')}
+          ${(() => {
+            const typeWithTag = m.tag && m.tag !== 'undefined' && m.tag !== ''
+              ? `${m.type} (${m.tag})`
+              : m.type
+            return [expandSize(m.size), typeWithTag, m.alignment].filter(Boolean).join(' · ')
+          })()}
         </div>
       </div>
       <div style="border-top:2px solid #1A1C1E;margin-bottom:10px;"></div>
@@ -3577,7 +5339,7 @@ function buildMonsterDetailCard(m) {
           </div>`).join('')}
       </div>
       <div style="border-top:1px solid #1A1C1E;margin-bottom:10px;"></div>
-      ${sline('Skills', m.skill)}
+      ${sline('Skills', m.skill ? m.skill.split(',').map(s => s.trim()).sort().join(', ') : '')}
       ${sline('Saving Throws', m.save)}
       ${sline('Damage Immunities', m.immune)}
       ${sline('Resistances', m.resist)}
@@ -3595,7 +5357,7 @@ function buildMonsterDetailCard(m) {
         )
         return sline('Proficiency Bonus', `+${profBonus}`)
       })()}
-      ${m.tag ? sline('Tag', m.tag) : ''}
+      ${(m.tag && m.tag !== 'undefined' && m.tag !== '') ? sline('Tag', m.tag) : ''}
       ${m.source ? sline('Source', m.source) : ''}
       ${absec('TRAITS', m.traits)}
       ${absec('ACTIONS', m.actions)}
@@ -3638,7 +5400,7 @@ function buildMonsterDetailCard(m) {
                   ${fullSpell.range ? ` · ${fullSpell.range}` : ''}
                   ${fullSpell.duration ? ` · ${fullSpell.duration}` : ''}
                 </div>
-                <div style="font-size:13px;white-space:pre-wrap;color:#bbb;line-height:1.6;">${fullSpell.text || ''}</div>
+                <div style="font-size:13px;white-space:pre-wrap;color:#bbb;line-height:1.6;">${renderMarkdown(fullSpell.text || '')}</div>
               </div>
             </div>`
         }
@@ -3751,7 +5513,7 @@ function buildNPCDetailCard(npc) {
       <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">${title}</div>
       ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;">
-        ${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${it.text||''}</div>`).join('')}
+        ${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${renderMarkdown(it.text||'')}</div>`).join('')}
     </div>`
   }
   const abs = [['STR','str'],['DEX','dex'],['CON','con'],['INT','int'],['WIS','wis'],['CHA','cha']]
@@ -3778,6 +5540,11 @@ function buildNPCDetailCard(npc) {
                cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
         &#9998; Edit
       </button>
+      <button onclick="deleteNPC('${npc.uid}')"
+        style="background:#8b0000;border:2px solid #5a0000;color:#e0d5c5;padding:6px 16px;
+               cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+        Delete
+      </button>
     </div>
     <div style="background:#262F35;border:none;border-radius:6px;
                 padding:20px;max-width:840px;font-family:var(--app-font);color:#e0d5c5;">
@@ -3787,7 +5554,7 @@ function buildNPCDetailCard(npc) {
                border-radius:50%;object-fit:cover;border:2px solid #4587A2;">
         ` : ''}
         ${displayName ? `
-          <div style="font-size:26px;font-weight:bold;margin-bottom:4px;color:#e0d5c5;${npc.portrait || npc._draft?.portrait ? 'padding-right:70px;' : ''}">
+          <div style="font-size:26px;font-weight:bold;margin-bottom:4px;color:#7B9BA8;${npc.portrait || npc._draft?.portrait ? 'padding-right:70px;' : ''}">
             ${displayName}
           </div>
         ` : ''}
@@ -3797,22 +5564,10 @@ function buildNPCDetailCard(npc) {
             ${npc.name}
           </div>
           <div style="font-size:13px;color:#888;font-style:italic;">
-            ${[npc.size, npc.type].filter(Boolean).join(' ')}${npc.tag ? ` (${npc.tag})` : ''}
+            ${[expandSize(npc.size), npc.type].filter(Boolean).join(' ')}${npc.tag ? ` (${npc.tag})` : ''}
           </div>
         </div>
       </div>
-      ${npc.notes && npc.notes.length > 0 ? `
-        <div style="background:#0d1b2a;border:1px solid #1e2d4a;border-radius:4px;padding:12px;margin-bottom:12px;">
-          ${npc.notes.map(note => `
-            <div style="margin-bottom:${note === npc.notes[npc.notes.length-1] ? '0' : '10'}px;">
-              ${note.title ? `<div style="font-size:12px;color:#4a9a9a;letter-spacing:.06em;
-                font-weight:700;margin-bottom:4px;">${note.title}</div>` : ''}
-              <div style="font-size:13px;color:#b8b0a0;line-height:1.6;white-space:pre-wrap;">
-                ${note.body || ''}</div>
-            </div>
-          `).join('')}
-        </div>
-      ` : ''}
       <div style="border-top:2px solid #1A1C1E;margin-bottom:10px;"></div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
         <div style="background:#1A1C1E;padding:8px;border-radius:4px;text-align:center;">
@@ -3857,18 +5612,40 @@ function buildNPCDetailCard(npc) {
         }).join('')}
       </div>
       <div style="border-top:1px solid #1A1C1E;margin-bottom:10px;"></div>
-      ${sline('Skills', npc.skill || (npc.skills && npc.skills.length > 0
-        ? npc.skills.map(sk => {
+      ${sline('Skills', (() => {
+        if (npc.skill) return npc.skill.split(',').map(s => s.trim()).sort().join(', ')
+        if (npc.skills && Array.isArray(npc.skills) && npc.skills.length > 0) {
+          return npc.skills.sort((a, b) => {
+            const nameA = typeof a.id === 'number' ? SKILL_NAMES[a.id] : (a.name || 'Unknown')
+            const nameB = typeof b.id === 'number' ? SKILL_NAMES[b.id] : (b.name || 'Unknown')
+            return nameA.localeCompare(nameB)
+          }).map(sk => {
             const skillName = typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : (sk.name || 'Unknown')
             return `${skillName} ${sk.modifier >= 0 ? '+' : ''}${sk.modifier}`
           }).join(', ')
-        : ''))}
-      ${sline('Saving Throws', npc.save || (npc.savingThrows && npc.savingThrows.length > 0
-        ? npc.savingThrows.map(st => {
-            const abilityName = typeof st.ability === 'number' ? ABILITY_NAMES[st.ability] : st.ability
-            return `${abilityName} ${st.modifier >= 0 ? '+' : ''}${st.modifier}`
-          }).join(', ')
-        : ''))}
+        }
+        if (typeof npc.skills === 'string') return npc.skills.split(',').map(s => s.trim()).sort().join(', ')
+        return ''
+      })())}
+      ${sline('Saving Throws', npc.save || (npc.savingThrows && Array.isArray(npc.savingThrows) && npc.savingThrows.length > 0
+        ? (() => {
+            // Sort by standard D&D ability order
+            const ABILITY_ORDER = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA']
+            const sorted = [...npc.savingThrows].sort((a, b) => {
+              const aName = typeof a.ability === 'number'
+                ? ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'][a.ability]
+                : String(a.ability).toUpperCase()
+              const bName = typeof b.ability === 'number'
+                ? ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'][b.ability]
+                : String(b.ability).toUpperCase()
+              return ABILITY_ORDER.indexOf(aName) - ABILITY_ORDER.indexOf(bName)
+            })
+            return sorted.map(st => {
+              const abilityName = typeof st.ability === 'number' ? ABILITY_NAMES[st.ability] : st.ability
+              return `${abilityName} ${st.modifier >= 0 ? '+' : ''}${st.modifier}`
+            }).join(', ')
+          })()
+        : (typeof npc.savingThrows === 'string' ? npc.savingThrows : '')))}
       ${sline('Damage Immunities', npc.immune)}
       ${sline('Resistances', npc.resist)}
       ${sline('Vulnerabilities', npc.vulnerable)}
@@ -3904,6 +5681,9 @@ function buildNPCDetailCard(npc) {
             ? compendiumData.spells.find(s => s.name === spell) || { name: spell, level: '0' }
             : (compendiumData.spells.find(s => s.name === spell.name) || spell)
           const id = 'npc-spell-' + npc.uid + '-' + fullSpell.name.replace(/[^a-z0-9]/gi, '')
+          const isCantrip = fullSpell.level === '0' || fullSpell.level === '' || fullSpell.level === 0 || !fullSpell.level
+          const levelDisplay = isCantrip ? 'Cantrip' : 'Level ' + fullSpell.level
+          const levelBadge = isCantrip ? 'C' : fullSpell.level
           return `<div style="margin-bottom:4px;">
               <div onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'"
                 style="background:#0f3460;padding:10px 14px;border-radius:4px;cursor:pointer;
@@ -3912,19 +5692,19 @@ function buildNPCDetailCard(npc) {
                 onmouseout="this.style.background='#0f3460'">
                 <span style="font-size:13px;color:#e0d5c5;">${prefix}${fullSpell.name}</span>
                 <span style="font-size:11px;color:#888;background:#1A1C1E;padding:2px 8px;border-radius:3px;min-width:24px;text-align:center;">
-                  ${(fullSpell.level === '0' || fullSpell.level === 0 || !fullSpell.level) ? 'C' : fullSpell.level}
+                  ${levelBadge}
                 </span>
               </div>
               <div id="${id}"
                 style="display:none;background:#1A1C1E;padding:12px;border-radius:0 0 4px 4px;
                        border:1px solid #0f3460;border-top:none;">
                 <div style="font-size:12px;color:#666;margin-bottom:6px;">
-                  ${(fullSpell.level === '0' || fullSpell.level === 0 || !fullSpell.level) ? 'C' : 'Level ' + fullSpell.level}
+                  ${levelDisplay}${fullSpell.school ? ' — ' + fullSpell.school : ''}
                   ${fullSpell.time ? ' · ' + fullSpell.time : ''}
                   ${fullSpell.range ? ' · ' + fullSpell.range : ''}
                   ${fullSpell.duration ? ' · ' + fullSpell.duration : ''}
                 </div>
-                <div style="font-size:13px;white-space:pre-wrap;color:#bbb;line-height:1.6;">${fullSpell.text || ''}</div>
+                <div style="font-size:13px;white-space:pre-wrap;color:#bbb;line-height:1.6;">${renderMarkdown(fullSpell.text || '')}</div>
               </div>
             </div>`
         }
@@ -4011,13 +5791,26 @@ function buildNPCDetailCard(npc) {
                       margin-bottom:6px;">NOTES</div>
           <div style="font-size:13px;color:#b8b0a0;line-height:1.6;white-space:pre-wrap;">${npc.text}</div>
         </div>` : ''}
+      ${npc.notes && npc.notes.length > 0 ? `
+        <div style="margin-top:14px;">
+          <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
+                      margin-bottom:6px;">NOTES</div>
+          ${npc.notes.map(note => `
+            <div style="margin-bottom:${note === npc.notes[npc.notes.length-1] ? '0' : '12'}px;">
+              ${note.title ? `<div style="font-size:14.5px;color:#7B9BA8;
+                font-weight:700;margin-bottom:-10px;">${renderMarkdown(note.title)}</div>` : ''}
+              <div style="font-size:13px;color:#b8b0a0;line-height:1.6;white-space:pre-line;
+                text-indent:0;padding:0;margin:-6px 0 0 0;">
+                ${renderMarkdown(note.body || '')}</div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
     </div>`
 }
 
 function showPC(uid, skipHistory = false) {
-  console.log('showPC called with uid:', uid)
   const pc = compendiumData.players.find(p => p.uid === uid)
-  console.log('Found PC:', pc ? pc.name || pc.label : 'NOT FOUND')
   if (!pc) return
   if (!skipHistory) pushNav('pc-detail', uid)
   else currentScreen = { screen: 'pc-detail', uid }
@@ -4042,19 +5835,35 @@ function buildPCDetailCard(pc) {
       <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">${title}</div>
       ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;">
-        ${it.name ? `<strong>${it.name}.</strong> ` : ''}${it.desc||it.text||''}</div>`).join('')}
+        ${it.name ? `<strong>${it.name}.</strong> ` : ''}${renderMarkdown(it.desc||it.text||'')}</div>`).join('')}
     </div>`
   }
   const abs = [['STR','str'],['DEX','dex'],['CON','con'],['INT','int'],['WIS','wis'],['CHA','cha']]
   // Use label as display name, name as class info for XML-imported PCs
   const displayName = pc.label || pc.name || 'Unnamed Character'
-  const classInfo = pc._draft ? (pc._draft.class || '') : (pc.name || '')
+
+  // Build class info subtitle: "Class (Subclass) Level - Race"
+  let classInfo = ''
+  const pcClass = pc.class || pc._draft?.class || ''
+  const subclass = pc.subclass || pc._draft?.subclass || ''
+  const level = pc.level || pc.cr || 1
+  const race = pc.race || pc._draft?.race || pc.type || ''
+
+  if (pcClass) {
+    classInfo = subclass ? `${pcClass} (${subclass})` : pcClass
+    classInfo += ` ${level}`
+  } else {
+    classInfo = `Level ${level}`
+  }
+  if (race) {
+    classInfo += ` - ${race}`
+  }
 
   // Calculate proficiency bonus from level if not stored
   let profBonus = pc.proficiencyBonus || pc._draft?.proficiencyBonus
   if (!profBonus) {
-    const level = parseInt(pc.level || pc.cr) || 1
-    profBonus = level <= 4 ? 2 : level <= 8 ? 3 : level <= 12 ? 4 : level <= 16 ? 5 : 6
+    const lvl = parseInt(level) || 1
+    profBonus = lvl <= 4 ? 2 : lvl <= 8 ? 3 : lvl <= 12 ? 4 : lvl <= 16 ? 5 : 6
   }
 
   // Get size and type for stat block display
@@ -4073,6 +5882,11 @@ function buildPCDetailCard(pc) {
                cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
         &#9998; Edit
       </button>
+      <button onclick="deletePC('${pc.uid}')"
+        style="background:#8b0000;border:2px solid #5a0000;color:#e0d5c5;padding:6px 16px;
+               cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+        Delete
+      </button>
     </div>
     <div style="background:#262F35;border:none;border-radius:6px;
                 padding:20px;max-width:840px;font-family:var(--app-font);color:#e0d5c5;">
@@ -4082,7 +5896,7 @@ function buildPCDetailCard(pc) {
                border-radius:50%;object-fit:cover;border:2px solid #4587A2;">
         ` : ''}
         <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:2px;${pc.portrait ? 'padding-right:70px;' : ''}">
-          <div style="font-size:22px;font-weight:bold;">
+          <div style="font-size:22px;font-weight:bold;color:#7B9BA8;">
             ${displayName}
           </div>
           ${classInfo ? `<div style="font-size:15px;color:#999;">
@@ -4090,23 +5904,11 @@ function buildPCDetailCard(pc) {
           </div>` : ''}
         </div>
         <div style="font-size:13px;color:#888;font-style:italic;">
-          ${size} ${type}
+          ${expandSize(size)} ${type}
         </div>
         ${pc.player ? `<div style="font-size:13px;color:#666;margin-top:2px;">
           Played by ${pc.player}</div>` : ''}
       </div>
-      ${pc.notes && pc.notes.length > 0 ? `
-        <div style="background:#0d1b2a;border:1px solid #1e2d4a;border-radius:4px;padding:12px;margin-bottom:12px;">
-          ${pc.notes.map(note => `
-            <div style="margin-bottom:${note === pc.notes[pc.notes.length-1] ? '0' : '10'}px;">
-              ${note.title ? `<div style="font-size:12px;color:#4a9a9a;letter-spacing:.06em;
-                font-weight:700;margin-bottom:4px;">${note.title}</div>` : ''}
-              <div style="font-size:13px;color:#b8b0a0;line-height:1.6;white-space:pre-wrap;">
-                ${note.body || ''}</div>
-            </div>
-          `).join('')}
-        </div>
-      ` : ''}
       <div style="border-top:2px solid #1A1C1E;margin-bottom:10px;"></div>
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px;">
         <div style="background:#1A1C1E;padding:8px;border-radius:4px;text-align:center;">
@@ -4133,15 +5935,11 @@ function buildPCDetailCard(pc) {
           <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                       margin-bottom:3px;">INITIATIVE</div>
           <div style="font-size:20px;font-weight:bold;">${(() => {
-            if (pc.init !== undefined) {
-              const init = parseInt(pc.init)
+            if (pc.initiativeBonus !== undefined || pc._draft?.initiativeBonus !== undefined) {
+              const init = pc.initiativeBonus ?? pc._draft.initiativeBonus
               return init >= 0 ? '+' + init : init
             }
-            if (pc._draft?.initiativeBonus !== undefined) {
-              const init = pc._draft.initiativeBonus
-              return init >= 0 ? '+' + init : init
-            }
-            // Calculate from DEX if not provided
+            // Calculate from DEX (for XML PCs that don't have initiativeBonus)
             const dex = pc.dex || (pc.abilities && pc.abilities[1]) || (pc._draft?.dex) || 10
             const initMod = Math.floor((dex - 10) / 2)
             return initMod >= 0 ? '+' + initMod : initMod
@@ -4169,21 +5967,83 @@ function buildPCDetailCard(pc) {
         }).join('')}
       </div>
       <div style="border-top:1px solid #1A1C1E;margin:10px 0;"></div>
-      ${pc.skills && pc.skills.length > 0 ? sline('Skills',
-        pc.skills.map(sk => {
+      ${pc.skills && Array.isArray(pc.skills) && pc.skills.length > 0 ? sline('Skills',
+        pc.skills.sort((a, b) => {
+          const nameA = typeof a.id === 'number' ? SKILL_NAMES[a.id] : (a.name || 'Unknown')
+          const nameB = typeof b.id === 'number' ? SKILL_NAMES[b.id] : (b.name || 'Unknown')
+          return nameA.localeCompare(nameB)
+        }).map(sk => {
           const skillName = typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : (sk.name || 'Unknown')
           const mod = sk.modifier || 0
           return `${skillName} ${mod >= 0 ? '+' : ''}${mod}`
         }).join(', ')
-      ) : ''}
-      ${pc.savingThrows && pc.savingThrows.length > 0 ? sline('Saving Throws',
-        pc.savingThrows.map(st => {
-          const abilityName = typeof st.ability === 'number' ? ABILITY_NAMES[st.ability] : (st.ability || st.name || 'Unknown')
-          const mod = st.modifier || 0
-          return `${abilityName} ${mod >= 0 ? '+' : ''}${mod}`
-        }).join(', ')
-      ) : ''}
+      ) : (typeof pc.skills === 'string' && pc.skills ? sline('Skills', pc.skills) : '')}
+      ${pc.savingThrows && Array.isArray(pc.savingThrows) && pc.savingThrows.length > 0 ? sline('Saving Throws',
+        (() => {
+          // Sort by standard D&D ability order
+          const ABILITY_ORDER = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA']
+          const sorted = [...pc.savingThrows].sort((a, b) => {
+            const aName = typeof a.ability === 'number'
+              ? ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'][a.ability]
+              : String(a.ability || a.name || '').toUpperCase()
+            const bName = typeof b.ability === 'number'
+              ? ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'][b.ability]
+              : String(b.ability || b.name || '').toUpperCase()
+            return ABILITY_ORDER.indexOf(aName) - ABILITY_ORDER.indexOf(bName)
+          })
+          return sorted.map(st => {
+            const abilityName = typeof st.ability === 'number' ? ABILITY_NAMES[st.ability] : (st.ability || st.name || 'Unknown')
+            const mod = st.modifier || 0
+            return `${abilityName} ${mod >= 0 ? '+' : ''}${mod}`
+          }).join(', ')
+        })()
+      ) : (typeof pc.savingThrows === 'string' && pc.savingThrows ? sline('Saving Throws', pc.savingThrows) : '')}
       ${sline('Senses', pc.senses)}
+      ${(() => {
+        // Build passive senses line
+        const passives = []
+
+        // Passive Perception
+        if (pc.passive !== undefined && pc.passive !== '' && pc.passive !== null) {
+          passives.push(`Perception ${pc.passive}`)
+        } else {
+          // Auto-calculate from WIS
+          const wis = pc.wis || (pc.abilities && pc.abilities[4]) || (pc._draft?.wis) || 10
+          const wisMod = Math.floor((wis - 10) / 2)
+          const profBonus = pc.proficiencyBonus || Math.floor((parseInt(pc.level) || 1 - 1) / 4) + 2
+          const perceptionSkill = pc.skills?.find(sk => (typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : sk.name) === 'Perception')
+          const passivePerception = 10 + wisMod + (perceptionSkill ? profBonus : 0)
+          passives.push(`Perception ${passivePerception}`)
+        }
+
+        // Passive Insight
+        if (pc.passiveInsight !== undefined && pc.passiveInsight !== null) {
+          passives.push(`Insight ${pc.passiveInsight}`)
+        } else {
+          // Auto-calculate from WIS
+          const wis = pc.wis || (pc.abilities && pc.abilities[4]) || (pc._draft?.wis) || 10
+          const wisMod = Math.floor((wis - 10) / 2)
+          const profBonus = pc.proficiencyBonus || Math.floor((parseInt(pc.level) || 1 - 1) / 4) + 2
+          const insightSkill = pc.skills?.find(sk => (typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : sk.name) === 'Insight')
+          const passiveInsight = 10 + wisMod + (insightSkill ? profBonus : 0)
+          passives.push(`Insight ${passiveInsight}`)
+        }
+
+        // Passive Investigation
+        if (pc.passiveInvestigation !== undefined && pc.passiveInvestigation !== null) {
+          passives.push(`Investigation ${pc.passiveInvestigation}`)
+        } else {
+          // Auto-calculate from INT
+          const int = pc.int || (pc.abilities && pc.abilities[3]) || (pc._draft?.int) || 10
+          const intMod = Math.floor((int - 10) / 2)
+          const profBonus = pc.proficiencyBonus || Math.floor((parseInt(pc.level) || 1 - 1) / 4) + 2
+          const investigationSkill = pc.skills?.find(sk => (typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : sk.name) === 'Investigation')
+          const passiveInvestigation = 10 + intMod + (investigationSkill ? profBonus : 0)
+          passives.push(`Investigation ${passiveInvestigation}`)
+        }
+
+        return sline('Passive Senses', passives.join(', '))
+      })()}
       ${sline('Languages', pc.languages)}
       ${sline('Proficiency Bonus', `+${profBonus}`)}
       ${absec('TRAITS', pc.traits)}
@@ -4192,7 +6052,6 @@ function buildPCDetailCard(pc) {
       ${absec('REACTIONS', pc.reactions)}
       ${absec('LEGENDARY ACTIONS', pc.legendaryActions)}
       ${(() => {
-        console.log('PC spells check:', pc.name, 'selectedSpells:', pc.selectedSpells?.length, 'spells:', pc.spells?.length, '_draft:', !!pc._draft)
         // Get spells from selectedSpells or _draft, or convert from raw spells
         let spells = pc.selectedSpells || pc._draft?.selectedSpells || []
 
@@ -4239,7 +6098,7 @@ function buildPCDetailCard(pc) {
                   ${fullSpell.range ? ` · ${fullSpell.range}` : ''}
                   ${fullSpell.duration ? ` · ${fullSpell.duration}` : ''}
                 </div>
-                <div style="font-size:13px;white-space:pre-wrap;color:#bbb;line-height:1.6;">${fullSpell.text || ''}</div>
+                <div style="font-size:13px;white-space:pre-wrap;color:#bbb;line-height:1.6;">${renderMarkdown(fullSpell.text || '')}</div>
               </div>
             </div>`
         }
@@ -4311,6 +6170,21 @@ function buildPCDetailCard(pc) {
         html += '</div>'
         return html
       })()}
+      ${pc.notes && pc.notes.length > 0 ? `
+        <div style="margin-top:14px;">
+          <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
+                      margin-bottom:6px;">NOTES</div>
+          ${pc.notes.map(note => `
+            <div style="margin-bottom:${note === pc.notes[pc.notes.length-1] ? '0' : '12'}px;">
+              ${note.title ? `<div style="font-size:14.5px;color:#7B9BA8;
+                font-weight:700;margin-bottom:-10px;">${renderMarkdown(note.title)}</div>` : ''}
+              <div style="font-size:13px;color:#b8b0a0;line-height:1.6;white-space:pre-line;
+                text-indent:0;padding:0;margin:-6px 0 0 0;">
+                ${renderMarkdown(note.body || '')}</div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
     </div>`
 }
 
@@ -4322,7 +6196,7 @@ function renderAbilitySection(title, items) {
                  margin-bottom:8px;font-size:15px;">${title}</h3>
       ${items.map(item => `
         <div style="margin-bottom:8px;line-height:1.6;">
-          ${item.name ? `<strong>${item.name}.</strong> ` : ''}${item.text}
+          ${item.name ? `<strong>${item.name}.</strong> ` : ''}${renderMarkdown(item.text)}
           ${item.charges !== null ? `
             <span style="margin-left:6px;background:#0f3460;padding:2px 8px;
                          border-radius:10px;font-size:12px;">
@@ -4340,56 +6214,244 @@ function renderAbilitySection(title, items) {
 }
 
 // ── Spells ────────────────────────────────────────────────────────
-function renderSpells(container) {
-  if (compendiumData.spells.length === 0) {
-    container.innerHTML = `
-      <p style="color:#555;margin-bottom:16px;">No spells loaded. Import your compendium XML to get started.</p>
-      <button onclick="importXML()"
-        style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:9px 18px;
-               cursor:pointer;border-radius:4px;font-size:13px;font-family:var(--app-font);">
-        Import Compendium XML
-      </button>
-    `
-    return
-  }
-  container.innerHTML = `
-    <input type="text" placeholder="Search spells…"
-      style="width:100%;max-width:500px;padding:8px 12px;margin-bottom:16px;background:#5C5C5C;
-             border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-             border-radius:4px;font-size:14px;display:block;"
-      oninput="filterSpells(this.value)" />
-    <div id="spell-list"></div>
-  `
-  renderSpellList(compendiumData.spells)
+// Spell filter state
+let spellFilters = {
+  query: '',
+  level: '',
+  school: '',
+  ritual: '',
+  concentration: '',
+  homebrew: '',
+  thirdParty: ''
 }
 
+function renderSpells(container) {
+  // Get unique schools from actual data, normalized and deduplicated
+  let uniqueSchools = [...new Set(compendiumData.spells
+    .map(s => s.school || '')
+    .filter(school => {
+      // Filter out empty/null/undefined values
+      if (!school || !school.trim()) return false
+      return true
+    })
+    .map(school => {
+      // Normalize to title case for deduplication (with proper article/preposition handling)
+      const lowercase = ['of', 'the', 'a', 'an', 'in', 'from', 'with', 'and', 'or', 'but', 'for', 'to', 'at', 'by', 'on']
+      return school.split(' ').map((word, index) => {
+        if (!word) return word
+        const lower = word.toLowerCase()
+        // First word is always capitalized
+        if (index === 0) return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        // Keep articles/prepositions lowercase
+        if (lowercase.includes(lower)) return lower
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      }).join(' ')
+    })
+  )].sort()
+
+  // Move "None" to the end if it exists
+  const noneIndex = uniqueSchools.indexOf('None')
+  if (noneIndex !== -1) {
+    uniqueSchools.splice(noneIndex, 1)
+    uniqueSchools.push('None')
+  }
+
+  const filterStyle = `background:#1A1C1E;border:1px solid #2E2F2D;color:#e0d5c5;
+    font-family:var(--app-font);padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;`
+
+  const hasActiveFilters = spellFilters.query || spellFilters.level || spellFilters.school ||
+    spellFilters.ritual || spellFilters.concentration || spellFilters.homebrew || spellFilters.thirdParty
+
+  container.innerHTML = `
+    <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;">
+      <input id="spell-search" type="text" placeholder="Search spells…" value="${spellFilters.query}"
+        style="flex:1;max-width:500px;padding:8px 12px;background:#5C5C5C;
+               border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
+               border-radius:4px;font-size:14px;"
+        oninput="spellFilters.query=this.value;applySpellFilters()" />
+      <button onclick="openSpellBuilder()"
+        style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:8px 16px;
+               cursor:pointer;border-radius:4px;font-size:13px;font-family:var(--app-font);
+               white-space:nowrap;"
+        onmouseover="this.style.borderColor='#4a9a9a';this.style.color='#e0d5c5'"
+        onmouseout="this.style.borderColor='#445E22';this.style.color='#909090'">
+        + Create Spell
+      </button>
+    </div>
+
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
+      <select onchange="spellFilters.level=this.value;applySpellFilters()" style="${filterStyle}">
+        <option value="">All Levels</option>
+        <option value="0" ${spellFilters.level === '0' ? 'selected' : ''}>Cantrip</option>
+        ${[1,2,3,4,5,6,7,8,9].map(lvl =>
+          `<option value="${lvl}" ${spellFilters.level === String(lvl) ? 'selected' : ''}>Level ${lvl}</option>`
+        ).join('')}
+      </select>
+
+      <select onchange="spellFilters.school=this.value;applySpellFilters()" style="${filterStyle}">
+        <option value="">All Schools</option>
+        ${uniqueSchools.map(school => `<option value="${school}" ${spellFilters.school === school ? 'selected' : ''}>${school}</option>`).join('')}
+      </select>
+
+      ${threeStateToggle('ritual', 'Ritual', 'spell')}
+      ${threeStateToggle('concentration', 'Concentration', 'spell')}
+      ${threeStateToggle('homebrew', 'Homebrew', 'spell')}
+      ${threeStateToggle('thirdParty', 'Third Party', 'spell')}
+
+      <button id="clear-spell-filters" onclick="clearSpellFilters()"
+        style="background:#5C5C5C;color:#1E231A;border:4px solid #2E2F2D;padding:7px 14px;
+               border-radius:4px;font-family:var(--app-font);font-size:13px;font-weight:bold;
+               ${hasActiveFilters ? 'cursor:pointer;opacity:1;' : 'cursor:not-allowed;opacity:0.4;pointer-events:none;'}">
+        Clear Filters
+      </button>
+    </div>
+
+    <div id="spell-list"></div>
+  `
+  applySpellFilters()
+}
+
+function applySpellFilters() {
+  let filtered = compendiumData.spells
+
+  // Text search
+  if (spellFilters.query) {
+    const q = spellFilters.query.toLowerCase()
+    filtered = filtered.filter(s =>
+      s.name.toLowerCase().includes(q) ||
+      (s.classes || '').toLowerCase().includes(q)
+    )
+  }
+
+  // Level filter
+  if (spellFilters.level !== '') {
+    filtered = filtered.filter(s => {
+      const isCantrip = s.level === '0' || s.level === '' || !s.level
+      if (spellFilters.level === '0') {
+        return isCantrip
+      }
+      return s.level === spellFilters.level
+    })
+  }
+
+  // School filter (case-insensitive comparison)
+  if (spellFilters.school) {
+    filtered = filtered.filter(s => {
+      const school = (s.school || '').toLowerCase()
+      return school === spellFilters.school.toLowerCase()
+    })
+  }
+
+  // Ritual filter
+  if (spellFilters.ritual === 'ritual') {
+    filtered = filtered.filter(s => s.ritual === true)
+  } else if (spellFilters.ritual === 'non-ritual') {
+    filtered = filtered.filter(s => s.ritual !== true)
+  }
+
+  // Concentration filter
+  if (spellFilters.concentration === 'concentration') {
+    filtered = filtered.filter(s => s.concentration === true)
+  } else if (spellFilters.concentration === 'non-concentration') {
+    filtered = filtered.filter(s => s.concentration !== true)
+  }
+
+  // Homebrew and Third Party filters (OR logic when both active)
+  const homebrewActive = spellFilters.homebrew === 'homebrew'
+  const homebrewExclude = spellFilters.homebrew === 'non-homebrew'
+  const thirdPartyActive = spellFilters.thirdParty === 'third-party'
+  const thirdPartyExclude = spellFilters.thirdParty === 'non-third-party'
+
+  if (homebrewActive && thirdPartyActive) {
+    // Both active: show entries that are EITHER homebrew OR third party
+    filtered = filtered.filter(s => s.homebrew === true || s.thirdParty === true)
+  } else if (homebrewActive) {
+    // Only homebrew active
+    filtered = filtered.filter(s => s.homebrew === true)
+  } else if (thirdPartyActive) {
+    // Only third party active
+    filtered = filtered.filter(s => s.thirdParty === true)
+  } else if (homebrewExclude && thirdPartyExclude) {
+    // Both exclude: show entries that are NEITHER homebrew NOR third party
+    filtered = filtered.filter(s => s.homebrew !== true && s.thirdParty !== true)
+  } else if (homebrewExclude) {
+    // Only homebrew exclude
+    filtered = filtered.filter(s => s.homebrew !== true)
+  } else if (thirdPartyExclude) {
+    // Only third party exclude
+    filtered = filtered.filter(s => s.thirdParty !== true)
+  }
+
+  renderSpellList(filtered)
+
+  // Update Clear Filters button state dynamically
+  const clearBtn = document.getElementById('clear-spell-filters')
+  if (clearBtn) {
+    const hasActive = spellFilters.query || spellFilters.level !== '' ||
+      spellFilters.school || spellFilters.ritual || spellFilters.concentration || spellFilters.homebrew || spellFilters.thirdParty
+    clearBtn.style.opacity = hasActive ? '1' : '0.4'
+    clearBtn.style.pointerEvents = hasActive ? 'auto' : 'none'
+    clearBtn.style.cursor = hasActive ? 'pointer' : 'not-allowed'
+  }
+}
+
+function clearSpellFilters() {
+  spellFilters = {
+    query: '',
+    level: '',
+    school: '',
+    ritual: '',
+    concentration: '',
+    homebrew: '',
+    thirdParty: ''
+  }
+  const searchInput = document.getElementById('spell-search')
+  if (searchInput) searchInput.value = ''
+  renderSpells(document.getElementById('content'))
+}
+// Ensure function is accessible from inline onclick handlers
+window.clearSpellFilters = clearSpellFilters
+
 function filterSpells(query) {
-  renderSpellList(compendiumData.spells.filter(s =>
-    s.name.toLowerCase().includes(query.toLowerCase()) ||
-    s.classes.toLowerCase().includes(query.toLowerCase())
-  ))
+  // Legacy function - now redirects to new filter system
+  spellFilters.query = query
+  applySpellFilters()
 }
 
 function renderSpellList(spells) {
   const list = document.getElementById('spell-list')
   if (!list) return
+  if (compendiumData.spells.length === 0) {
+    list.innerHTML = '<p style="color:#e0d5c5;">No spells loaded. Import your compendium data or create a new spell now!</p>'
+    return
+  }
   if (spells.length === 0) {
     list.innerHTML = '<p style="color:#555;">No spells match that search.</p>'
     return
   }
-  list.innerHTML = spells.map(s => `
+  list.innerHTML = spells.map(s => {
+    const isCantrip = s.level === '0' || s.level === '' || !s.level
+    const isHomebrew = s.homebrew === true
+    const isThirdParty = s.thirdParty === true
+    return `
     <div onclick="showSpell('${s.name.replace(/'/g, "\\'")}')"
       style="background:#262F35;border:1px solid #1e2d4a;padding:12px;border-radius:4px;
              margin-bottom:6px;cursor:pointer;"
       onmouseover="this.style.borderColor='#4a9a9a'" onmouseout="this.style.borderColor='#1e2d4a'">
-      <div style="font-weight:bold;color:#4587A2;">${s.name}</div>
-      <div style="font-size:12px;color:#666;margin-top:2px;">
-        ${s.level === '0' ? 'Cantrip' : 'Level ' + s.level} ${s.school}
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;">
+        <div style="font-weight:bold;color:#7B9BA8;">${s.name}</div>
+        ${isHomebrew ? `<span style="background:#4a9a9a;color:#e0d5c5;font-size:10px;
+          padding:2px 6px;border-radius:3px;letter-spacing:.06em;font-weight:700;">HOMEBREW</span>` : ''}
+        ${isThirdParty ? `<span style="background:#3a5a7a;color:#e0d5c5;font-size:10px;
+          padding:2px 6px;border-radius:3px;letter-spacing:.06em;font-weight:700;">3RD PARTY</span>` : ''}
+      </div>
+      <div style="font-size:12px;color:#C8C8C8;margin-top:2px;">
+        ${isCantrip ? 'Cantrip' : 'Level ' + s.level} — ${s.school}
         ${s.classes ? ' · ' + s.classes : ''}
       </div>
-      <div style="font-size:12px;color:#555;margin-top:1px;">${s.time} · ${s.range} · ${s.duration}</div>
+      <div style="font-size:12px;color:#C8C8C8;margin-top:1px;">${s.time} · ${s.range} · ${s.duration}</div>
     </div>
-  `).join('')
+  `}).join('')
 }
 
 function showSpell(name, skipHistory = false) {
@@ -4399,28 +6461,49 @@ function showSpell(name, skipHistory = false) {
   else currentScreen = { screen: 'spell-detail', uid: name }
 
   const content = document.getElementById('content')
+  content.style.padding = '20px 20px 20px 260px'
+  content.style.overflow = 'auto'
+
+  const isCantrip = s.level === '0' || s.level === '' || !s.level
+  const isHomebrew = s.homebrew === true
+  const isThirdParty = s.thirdParty === true
 
   content.innerHTML = `
-    <button onclick="popNav()"
-      style="background:#3E3E3D;border:4px solid #2E2F2D;color:#e0d5c5;padding:6px 14px;
-             cursor:pointer;border-radius:4px;margin-bottom:20px;font-family:var(--app-font);
-             font-size:13px;">
-      ← Back to Spells
-    </button>
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:20px;">
+      <button onclick="popNav()"
+        style="background:#3E3E3D;border:4px solid #2E2F2D;color:#e0d5c5;padding:6px 14px;
+               cursor:pointer;border-radius:4px;font-family:var(--app-font);
+               font-size:13px;">
+        ← Back to Spells
+      </button>
+      <button onclick="openSpellBuilder('${s.name.replace(/'/g, "\\'")}')"
+        style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:6px 14px;
+               cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+        Edit
+      </button>
+    </div>
     <div style="background:#262F35;border:2px solid #4a9a9a;border-radius:6px;
                 padding:24px;max-width:700px;">
-      <h2 style="font-size:24px;margin-bottom:4px;">${s.name}</h2>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
+        <h2 style="font-size:24px;margin:0;color:#7B9BA8;">${s.name}</h2>
+        ${isHomebrew ? `<span style="background:#4a9a9a;color:#e0d5c5;font-size:10px;
+          padding:3px 8px;border-radius:3px;letter-spacing:.06em;font-weight:700;">HOMEBREW</span>` : ''}
+        ${isThirdParty ? `<span style="background:#3a5a7a;color:#e0d5c5;font-size:10px;
+          padding:3px 8px;border-radius:3px;letter-spacing:.06em;font-weight:700;">3RD PARTY</span>` : ''}
+      </div>
       <p style="font-style:italic;color:#888;margin-bottom:12px;">
-        ${s.level === '0' ? 'Cantrip' : 'Level ' + s.level} — ${s.school}
+        ${isCantrip ? 'Cantrip' : 'Level ' + s.level} — ${s.school}${s.ritual ? ' (Ritual)' : ''}
       </p>
       <hr style="border:none;border-top:1px solid #1A1C1E;margin-bottom:12px;">
       ${statRow('Casting Time', s.time)}
       ${statRow('Range', s.range)}
       ${statRow('Components', s.components)}
       ${statRow('Duration', s.duration)}
-      ${statRow('Classes', s.classes)}
       <hr style="border:none;border-top:1px solid #4a9a9a;margin:12px 0;">
       <p style="line-height:1.7;white-space:pre-wrap;font-size:14px;">${s.text}</p>
+      <hr style="border:none;border-top:1px solid #1A1C1E;margin:12px 0;">
+      ${statRow('Classes/Subclasses', s.classes)}
+      ${s.source ? `<div style="font-size:12px;color:#666;margin-top:8px;"><span style="color:#888;font-weight:600;">Source:</span> ${s.source}</div>` : ''}
     </div>
   `
 }
@@ -4429,7 +6512,7 @@ function showSpell(name, skipHistory = false) {
 function renderPlayers(container) {
   if (compendiumData.players.length === 0 && compendiumData.npcs.length === 0) {
     container.innerHTML = `
-      <p style="color:#555;margin-bottom:16px;">No characters loaded. Import a campaign XML to get started.</p>
+      <p style="color:#e0d5c5;margin-bottom:16px;">No characters loaded. Create a new campaign or import one in settings to get started!</p>
       <button onclick="importCampaignXML()"
         style="background:#4a9a9a;color:#e0d5c5;border:none;padding:9px 18px;
                cursor:pointer;border-radius:4px;font-size:13px;font-family:var(--app-font);">
@@ -4514,24 +6597,88 @@ function renderPlayerGrid(players, gridId) {
                   ${p.portrait || p._draft?.portrait ? 'padding-right:48px;' : ''}">
         ${p.label || p.name}
       </div>
-      <div style="font-size:12px;color:#666;margin-bottom:10px;
-                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${p.name}</div>
+      <div style="font-size:12px;color:#888;margin-bottom:10px;
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+        ${(() => {
+          const levelStr = p.level ? `LV ${p.level}` : ''
+          const classStr = p.race || p.class
+            ? `${p.race || ''} ${p.class || ''}`.trim()
+            : (p.classInfo || '')
+          const isNPC = p.isNPC === true
+
+          if (isNPC) {
+            return p.cr ? `CR ${p.cr} · ${p.name}` : p.name
+          } else if (classStr) {
+            return levelStr ? `${levelStr} · ${classStr}` : classStr
+          } else {
+            return levelStr || p.name
+          }
+        })()}
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px;font-size:12px;">
         <div style="background:#1A1C1E;padding:5px 4px;border-radius:3px;text-align:center;">
-          <div style="font-size:9px;color:#555;letter-spacing:.06em;">HP</div>
+          <div style="font-size:9px;color:#666;letter-spacing:.06em;">HP</div>
           <div style="font-weight:bold;">${p.hpCurrent}/${p.hpMax}</div>
         </div>
         <div style="background:#1A1C1E;padding:5px 4px;border-radius:3px;text-align:center;">
-          <div style="font-size:9px;color:#555;letter-spacing:.06em;">AC</div>
-          <div style="font-weight:bold;">${p.ac || '—'}</div>
+          <div style="font-size:9px;color:#666;letter-spacing:.06em;">AC</div>
+          <div style="font-weight:bold;">${(p.acValue ?? p.ac) != null ? (p.acValue ?? p.ac) : '—'}</div>
         </div>
         <div style="background:#1A1C1E;padding:5px 4px;border-radius:3px;text-align:center;">
-          <div style="font-size:9px;color:#555;letter-spacing:.06em;">INIT</div>
-          <div style="font-weight:bold;">${p.init ? modStr(parseInt(p.init)) : '—'}</div>
+          <div style="font-size:9px;color:#666;letter-spacing:.06em;">INIT</div>
+          <div style="font-weight:bold;">${(() => {
+            if (p.initiativeBonus != null) return modStr(parseInt(p.initiativeBonus))
+            const dex = parseInt(p.abilities?.[1]) || 10
+            const initBonus = Math.floor((dex - 10) / 2)
+            return modStr(initBonus)
+          })()}</div>
         </div>
       </div>
     </div>
   `).join('')
+}
+
+function deletePC(uid) {
+  const campaign = compendiumData.activeCampaign
+  if (!campaign || !compendiumData.campaigns[campaign]) return
+
+  const pc = compendiumData.players.find(p => p.uid === uid)
+  if (!pc) return
+
+  confirmDelete('Delete PC?', () => {
+    // Remove from campaign's players array
+    compendiumData.campaigns[campaign].players = compendiumData.campaigns[campaign].players.filter(p => p.uid !== uid)
+    // Remove from active players list
+    compendiumData.players = compendiumData.players.filter(p => p.uid !== uid)
+    saveCampaigns(compendiumData.campaigns)
+    showSection('home')
+  })
+}
+
+function deleteNPC(uid) {
+  const campaign = compendiumData.activeCampaign
+  if (!campaign || !compendiumData.campaigns[campaign]) return
+
+  const npc = compendiumData.npcs.find(n => n.uid === uid)
+  if (!npc) return
+
+  confirmDelete('Delete NPC?', () => {
+    // Remove from campaign's npcs array
+    compendiumData.campaigns[campaign].npcs = compendiumData.campaigns[campaign].npcs.filter(n => n.uid !== uid)
+    // Remove from active npcs list
+    compendiumData.npcs = compendiumData.npcs.filter(n => n.uid !== uid)
+
+    // Remove NPC uid from all adventures that reference it
+    const adventures = compendiumData.campaigns[campaign].adventures || []
+    adventures.forEach(adv => {
+      if (adv.npcUids && adv.npcUids.includes(uid)) {
+        adv.npcUids = adv.npcUids.filter(id => id !== uid)
+      }
+    })
+
+    saveCampaigns(compendiumData.campaigns)
+    showSection('home')
+  })
 }
 
 function showPlayer(uid, skipHistory = false) {
@@ -4579,6 +6726,19 @@ function toggleTraitText(id) {
   }
   const arrow = document.getElementById(id + '-arrow')
   if (arrow) arrow.textContent = expanded ? '▼' : '▲'
+}
+
+function toggleNotesSection(id) {
+  const el = document.getElementById(id)
+  if (!el) return
+  const isHidden = el.style.display === 'none'
+  if (isHidden) {
+    el.style.display = 'block'
+  } else {
+    el.style.display = 'none'
+  }
+  const arrow = document.getElementById(id + '-arrow')
+  if (arrow) arrow.textContent = isHidden ? '▲' : '▼'
 }
 
 // ── Notes System ──────────────────────────────────────────────────
@@ -4662,7 +6822,7 @@ function renderNotes(scope) {
         </button>
       </div>
       ${notes.length === 0
-        ? `<div style="color:#444;font-size:13px;font-style:italic;">No notes yet.</div>`
+        ? `<div style="color:#1E231A;font-size:13px;font-style:italic;">No notes yet.</div>`
         : notes.map(n => noteItemHTML(n, scopeJs)).join('')}
     </div>
     ${wrapperEnd}
@@ -4682,32 +6842,49 @@ function noteItemHTML(note, scopeJs) {
         onmouseover="this.style.background='#4E4E4D'"
         onmouseout="this.style.background='#3E3E3D'">
         <span id="note-header-${note.id}" style="font-weight:bold;font-size:14px;color:#e0d5c5;">
-          ${displayTitle}
+          ${renderMarkdown(note.title || 'Untitled')}
         </span>
         <div style="display:flex;gap:8px;align-items:center;" onclick="event.stopPropagation()">
           <button onclick="deleteNote('${scopeJs}','${note.id}')"
-            style="background:none;border:none;color:#555;font-size:14px;cursor:pointer;padding:2px 4px;"
+            style="background:none;border:none;color:#0C0C0B;font-size:14px;cursor:pointer;padding:2px 4px;"
             title="Delete note">&#x2715;</button>
-          <span id="note-arrow-${note.id}" style="color:#555;font-size:12px;pointer-events:none;">▼</span>
+          <span id="note-arrow-${note.id}" style="color:#0C0C0B;font-size:12px;pointer-events:none;">▼</span>
         </div>
       </div>
       <div id="note-body-${note.id}" style="display:none;padding:12px;background:#1E231A;">
-        <input id="note-title-${note.id}" value="${titleSafe}"
-          placeholder="Note title"
-          style="width:100%;box-sizing:border-box;background:#3E3E3D;border:4px solid #2E2F2D;
-                 color:#e0d5c5;padding:6px 8px;border-radius:3px;font-family:var(--app-font);
-                 font-size:13px;margin-bottom:8px;outline:none;" />
-        <textarea id="note-text-${note.id}" rows="5"
-          placeholder="Note text..."
-          style="width:100%;box-sizing:border-box;background:#3E3E3D;border:4px solid #2E2F2D;
-                 color:#e0d5c5;padding:6px 8px;border-radius:3px;font-family:var(--app-font);
-                 font-size:13px;resize:vertical;outline:none;">${bodySafe}</textarea>
-        <div style="margin-top:8px;text-align:right;">
-          <button onclick="saveNote('${scopeJs}','${note.id}')"
-            style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:5px 16px;
-                   cursor:pointer;border-radius:4px;font-size:12px;font-family:var(--app-font);">
-            Save
-          </button>
+        <div id="note-view-${note.id}" style="display:block;">
+          <div style="font-size:14px;color:#e0d5c5;font-weight:bold;margin-bottom:8px;">
+            ${renderMarkdown(note.title || 'Untitled')}
+          </div>
+          <div style="font-size:13px;color:#b8b0a0;line-height:1.6;white-space:pre-line;">
+            ${renderMarkdown(note.body || '')}
+          </div>
+          <div style="margin-top:12px;text-align:right;">
+            <button onclick="editNote('${scopeJs}','${note.id}')"
+              style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:5px 16px;
+                     cursor:pointer;border-radius:4px;font-size:12px;font-family:var(--app-font);">
+              Edit
+            </button>
+          </div>
+        </div>
+        <div id="note-edit-${note.id}" style="display:none;">
+          <input id="note-title-${note.id}" value="${titleSafe}"
+            placeholder="Note title"
+            style="width:100%;box-sizing:border-box;background:#3E3E3D;border:4px solid #2E2F2D;
+                   color:#e0d5c5;padding:6px 8px;border-radius:3px;font-family:var(--app-font);
+                   font-size:13px;margin-bottom:8px;outline:none;" />
+          <textarea id="note-text-${note.id}" rows="5"
+            placeholder="Note text..."
+            style="width:100%;box-sizing:border-box;background:#3E3E3D;border:4px solid #2E2F2D;
+                   color:#e0d5c5;padding:6px 8px;border-radius:3px;font-family:var(--app-font);
+                   font-size:13px;resize:vertical;outline:none;">${bodySafe}</textarea>
+          <div style="margin-top:8px;text-align:right;">
+            <button onclick="saveNote('${scopeJs}','${note.id}')"
+              style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:5px 16px;
+                     cursor:pointer;border-radius:4px;font-size:12px;font-family:var(--app-font);">
+              Save
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -4750,8 +6927,20 @@ function addNote(scope) {
   renderNotes(scope)
   const body  = document.getElementById('note-body-'  + newNote.id)
   const arrow = document.getElementById('note-arrow-' + newNote.id)
+  const viewDiv = document.getElementById('note-view-' + newNote.id)
+  const editDiv = document.getElementById('note-edit-' + newNote.id)
   if (body)  body.style.display = 'block'
   if (arrow) arrow.textContent  = '▲'
+  // Open new notes in edit mode
+  if (viewDiv) viewDiv.style.display = 'none'
+  if (editDiv) editDiv.style.display = 'block'
+}
+
+function editNote(scope, noteId) {
+  const viewDiv = document.getElementById('note-view-' + noteId)
+  const editDiv = document.getElementById('note-edit-' + noteId)
+  if (viewDiv) viewDiv.style.display = 'none'
+  if (editDiv) editDiv.style.display = 'block'
 }
 
 function saveNote(scope, noteId) {
@@ -4763,35 +6952,37 @@ function saveNote(scope, noteId) {
   if (titleEl) note.title = titleEl.value
   if (textEl)  note.body  = textEl.value
   persistNotes(scope)
-  const header = document.getElementById('note-header-' + noteId)
-  if (header) header.textContent = note.title || 'Untitled'
+  // Re-render the note to show updated markdown in view mode
+  renderNotes(scope)
 }
 
 function deleteNote(scope, noteId) {
-  if (scope === 'campaign') {
-    const camp = compendiumData.campaigns[compendiumData.activeCampaign]
-    if (!camp || Array.isArray(camp)) return
-    camp.notes = (camp.notes || []).filter(n => n.id !== noteId)
-  } else if (scope === 'enc') {
-    if (!enc.current) return
-    enc.current.notes = (enc.current.notes || []).filter(n => n.id !== noteId)
-  } else if (scope.startsWith('adventure-')) {
-    const adventureId = scope.slice(10)
-    const camp = compendiumData.campaigns[compendiumData.activeCampaign]
-    if (!camp || Array.isArray(camp)) return
-    const adventures = camp.adventures || []
-    const adventure = adventures.find(a => a.id === adventureId)
-    if (!adventure) return
-    adventure.notes = (adventure.notes || []).filter(n => n.id !== noteId)
-  } else if (scope.startsWith('char-')) {
-    const uid = scope.slice(5)
-    const p = compendiumData.players.find(x => x.uid === uid)
-      || compendiumData.npcs.find(x => x.uid === uid)
-    if (!p) return
-    p.notes = (p.notes || []).filter(n => n.id !== noteId)
-  }
-  persistNotes(scope)
-  renderNotes(scope)
+  confirmDelete('Delete note?', () => {
+    if (scope === 'campaign') {
+      const camp = compendiumData.campaigns[compendiumData.activeCampaign]
+      if (!camp || Array.isArray(camp)) return
+      camp.notes = (camp.notes || []).filter(n => n.id !== noteId)
+    } else if (scope === 'enc') {
+      if (!enc.current) return
+      enc.current.notes = (enc.current.notes || []).filter(n => n.id !== noteId)
+    } else if (scope.startsWith('adventure-')) {
+      const adventureId = scope.slice(10)
+      const camp = compendiumData.campaigns[compendiumData.activeCampaign]
+      if (!camp || Array.isArray(camp)) return
+      const adventures = camp.adventures || []
+      const adventure = adventures.find(a => a.id === adventureId)
+      if (!adventure) return
+      adventure.notes = (adventure.notes || []).filter(n => n.id !== noteId)
+    } else if (scope.startsWith('char-')) {
+      const uid = scope.slice(5)
+      const p = compendiumData.players.find(x => x.uid === uid)
+        || compendiumData.npcs.find(x => x.uid === uid)
+      if (!p) return
+      p.notes = (p.notes || []).filter(n => n.id !== noteId)
+    }
+    persistNotes(scope)
+    renderNotes(scope)
+  })
 }
 
 function toggleNote(scope, noteId) {
@@ -4967,6 +7158,11 @@ function openAdventure(id, skipHistory = false) {
         <option value="active" ${adventure.status === 'active' ? 'selected' : ''}>Active</option>
         <option value="completed" ${adventure.status === 'completed' ? 'selected' : ''}>Completed</option>
       </select>
+      <button onclick="deleteAdventure('${id}')"
+        style="background:#8b0000;border:2px solid #5a0000;color:#e0d5c5;padding:6px 14px;
+               cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+        Delete
+      </button>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;">
@@ -4988,17 +7184,12 @@ function openAdventure(id, skipHistory = false) {
           <div style="font-size:14px;color:#1E231A;letter-spacing:.1em;font-weight:700;margin-bottom:8px;">
             ASSOCIATED NPCS
           </div>
-          ${allNPCs.length === 0 ? '<div style="color:#555;font-size:13px;">No NPCs in campaign</div>' : ''}
+          ${allNPCs.length === 0 ? '<div style="color:#1E231A;font-size:13px;">No NPCs in campaign</div>' : ''}
           ${allNPCs.map(npc => `
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
-              <input type="checkbox" id="npc-${npc.uid}"
-                ${(adventure.npcUids || []).includes(npc.uid) ? 'checked' : ''}
-                onchange="toggleAdventureNPC('${id}', '${npc.uid}', this.checked)"
-                style="cursor:pointer;">
-              <label onclick="showNPC('${npc.uid}')"
-                style="flex:1;color:#e0d5c5;font-size:13px;cursor:pointer;">
-                ${npc.properName || npc.label || npc.name}
-              </label>
+              ${circleToggle('npc-' + npc.uid, (adventure.npcUids || []).includes(npc.uid),
+                `toggleAdventureNPC('${id}', '${npc.uid}', !((compendiumData.campaigns['${campaign}'].adventures['${id}'].npcUids || []).includes('${npc.uid}')))`,
+                `<span onclick="event.stopPropagation(); showNPC('${npc.uid}')" style="cursor:pointer;">${npc.properName || npc.label || npc.name}</span>`)}
             </div>
           `).join('')}
         </div>
@@ -5120,9 +7311,11 @@ function removeAdventureEncounter(adventureId, encounterId) {
   const adventure = adventures.find(a => a.id === adventureId)
   if (!adventure) return
 
-  adventure.encounterIds = (adventure.encounterIds || []).filter(id => id !== encounterId)
-  saveCampaigns(compendiumData.campaigns)
-  openAdventure(adventureId, true)
+  confirmDelete('Remove encounter from adventure?', () => {
+    adventure.encounterIds = (adventure.encounterIds || []).filter(id => id !== encounterId)
+    saveCampaigns(compendiumData.campaigns)
+    openAdventure(adventureId, true)
+  })
 }
 
 function showAddEncounterToAdventure(adventureId) {
@@ -5189,6 +7382,21 @@ function addEncounterToAdventure(adventureId, encounterId) {
   openAdventure(adventureId, true)
 }
 
+function deleteAdventure(adventureId) {
+  const campaign = compendiumData.activeCampaign
+  if (!campaign || !compendiumData.campaigns[campaign]) return
+
+  const adventures = compendiumData.campaigns[campaign].adventures || []
+  const adventure = adventures.find(a => a.id === adventureId)
+  if (!adventure) return
+
+  confirmDelete('Delete adventure?', () => {
+    compendiumData.campaigns[campaign].adventures = adventures.filter(a => a.id !== adventureId)
+    saveCampaigns(compendiumData.campaigns)
+    showSection('home')
+  })
+}
+
 function renderAdventuresSection() {
   const campaign = compendiumData.activeCampaign
   if (!campaign || !compendiumData.campaigns[campaign]) return ''
@@ -5219,7 +7427,7 @@ function renderAdventuresSection() {
         </button>
       </div>
       ${adventures.length === 0 ? `
-        <div style="color:#555;font-size:13px;">
+        <div style="color:#1E231A;font-size:13px;">
           No adventures yet. Create one to organize your campaign's storylines.
         </div>
       ` : `
@@ -5254,13 +7462,242 @@ function autoLoad() {
     try {
       compendiumData.monsters = (savedCompendium.monsters || []).sort((a, b) => a.name.localeCompare(b.name))
       compendiumData.spells   = (savedCompendium.spells   || []).sort((a, b) => a.name.localeCompare(b.name))
-    } catch (err) { console.error('Auto-load compendium failed:', err) }
+
+      // One-time spell migration: convert old format to new format
+      let spellsMigrated = 0
+      const schoolCodeMap = {
+        'A': 'Abjuration',
+        'C': 'Conjuration',
+        'D': 'Divination',
+        'EN': 'Enchantment',
+        'EV': 'Evocation',
+        'I': 'Illusion',
+        'N': 'Necromancy',
+        'T': 'Transmutation',
+        '': 'None'
+      }
+
+      for (const spell of compendiumData.spells) {
+        let needsMigration = false
+
+        // a) Migrate school: convert letter codes to full names (run on ALL spells)
+        if (spell.school && (spell.school.length <= 2 || schoolCodeMap[spell.school])) {
+          // It's a letter code or known short code
+          const fullName = schoolCodeMap[spell.school]
+          if (fullName) {
+            spell.school = fullName
+            needsMigration = true
+          }
+        } else if (!spell.school || spell.school === '') {
+          spell.school = 'None'
+          needsMigration = true
+        }
+
+        // b) Migrate components: parse string into separate fields
+        // Run on ALL spells where verbal is undefined OR where verbal is false but components string exists
+        // (catches Format B XML that was imported before the parser update)
+        if (spell.verbal === undefined || (spell.verbal === false && spell.components)) {
+          const comp = spell.components || ''
+          spell.verbal = comp.includes('V')
+          spell.somatic = comp.includes('S')
+          spell.material = comp.includes('M')
+
+          // Extract materials text from parentheses
+          spell.materials = ''
+          if (spell.material) {
+            const match = comp.match(/M \(([^)]+)\)/)
+            if (match) {
+              spell.materials = match[1]
+            }
+          }
+
+          needsMigration = true
+        }
+
+        // c) Migrate ritual: check if undefined
+        if (spell.ritual === undefined) {
+          // Check if name ends with (Ritual Only)
+          spell.ritual = spell.name.endsWith('(Ritual Only)') || spell.name.includes('(ritual)')
+          needsMigration = true
+        }
+
+        // d) Migrate concentration: check if undefined
+        if (spell.concentration === undefined) {
+          const duration = spell.duration || ''
+          spell.concentration = duration.toLowerCase().includes('concentration')
+          needsMigration = true
+        }
+
+        if (needsMigration) spellsMigrated++
+      }
+
+      if (spellsMigrated > 0) {
+        console.log(`[Spell Migration] Migrated ${spellsMigrated} spell(s) to new format`)
+        // Save migrated data
+        saveCompendium({ monsters: compendiumData.monsters, spells: compendiumData.spells })
+      }
+
+      // One-time monster type migration: extract subtypes from type field into tag field
+      console.log('[Monster Type Migration] Starting migration check...')
+      console.log(`[Monster Type Migration] Total monsters loaded: ${compendiumData.monsters.length}`)
+      let monstersMigrated = 0
+      let undefinedTagsCleaned = 0
+      for (const monster of compendiumData.monsters) {
+        // FIX 1A: Clean up existing "undefined" string tags
+        if (monster.tag === 'undefined') {
+          monster.tag = ''
+          undefinedTagsCleaned++
+        }
+
+        // Only migrate if tag is empty/undefined AND type contains "("
+        const needsMigration = (!monster.tag || monster.tag === '') && monster.type && monster.type.includes('(')
+        if (needsMigration) {
+          const rawType = monster.type
+          let baseType = rawType
+          let subtypeTag = ''
+
+          // Split on "(" - handle both "(subtype)" and "(subtype" (missing closing paren)
+          const parts = rawType.split('(')
+          baseType = parts[0].trim()
+          // Everything after "(" - strip any trailing ")" if present
+          subtypeTag = parts[1] ? parts[1].replace(/\)\s*$/, '').trim() : ''
+
+          // Title-case helper (same as in parseMonsterNode)
+          function titleCase(str) {
+            if (!str || str.length <= 1 || str === '$' || /^[A-Z]{1,3}$/.test(str)) {
+              return str
+            }
+            if (str.toLowerCase() === 'varies') {
+              return str.toLowerCase()
+            }
+            const lowercase = ['of', 'the', 'a', 'an', 'in', 'from', 'with', 'and', 'or', 'but', 'for', 'to', 'at', 'by', 'on']
+            return str.split(' ').map((word, index) => {
+              if (!word) return word
+              const lower = word.toLowerCase()
+              if (index === 0) {
+                return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+              }
+              if (lowercase.includes(lower)) {
+                return lower
+              }
+              return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+            }).join(' ')
+          }
+
+          // Update monster with normalized values
+          monster.type = titleCase(baseType)
+          // FIX 1B: Only set tag if subtypeTag is non-empty
+          monster.tag = subtypeTag ? titleCase(subtypeTag) : ''
+          monstersMigrated++
+        }
+      }
+
+      if (undefinedTagsCleaned > 0) {
+        console.log(`[Monster Type Migration] Cleaned up ${undefinedTagsCleaned} "undefined" string tags`)
+      }
+
+      console.log(`[Monster Type Migration] Migration complete: ${monstersMigrated} monsters migrated`)
+      if (monstersMigrated > 0) {
+        console.log(`[Monster Type Migration] Migrated ${monstersMigrated} monster(s) - extracted subtypes from type field into tag field`)
+      }
+
+      // Save if either cleanup or migration occurred
+      if (undefinedTagsCleaned > 0 || monstersMigrated > 0) {
+        saveCompendium({ monsters: compendiumData.monsters, spells: compendiumData.spells })
+      }
+    } catch (err) {
+      console.error('Auto-load compendium failed:', err)
+      console.error('Stack trace:', err.stack)
+    }
   }
 
   const savedCampaigns = loadCampaigns()
   if (savedCampaigns) {
     try {
       compendiumData.campaigns = savedCampaigns
+
+      // One-time migration: convert old PC format to new format
+      let migratedCount = 0
+      for (const campName in compendiumData.campaigns) {
+        const camp = compendiumData.campaigns[campName]
+        const pcs = Array.isArray(camp) ? camp.filter(p => !p.isNPC) : (camp.players || [])
+
+        for (const pc of pcs) {
+          // Check if PC needs migration (has hpValue but not hpMax)
+          if ((pc.hpValue || pc._draft?.hpValue) && !pc.hpMax) {
+            console.log(`[Migration] Converting PC: ${pc.name}`)
+
+            // Get source data (prefer _draft if it exists)
+            const src = pc._draft || pc
+
+            // Add normalized HP fields
+            pc.hpMax = src.hpValue || 1
+            pc.hpCurrent = src.hpValue || 1
+
+            // Add abilities array if missing
+            if (!pc.abilities) {
+              pc.abilities = [
+                String(src.str || 10),
+                String(src.dex || 10),
+                String(src.con || 10),
+                String(src.int || 10),
+                String(src.wis || 10),
+                String(src.cha || 10)
+              ]
+            }
+
+            // Normalize traits
+            if (pc.traits) {
+              pc.traits = pc.traits.map(t => {
+                if (t.limitedUsage && !t.charges && !t.chargesCurrent) {
+                  const lu = t.limitedUsage
+                  let recharge = null
+                  if (lu.type === 'recharge_5_6') recharge = 5
+                  else if (lu.type === 'recharge_6') recharge = 6
+                  else if (lu.type?.startsWith('recharge_')) {
+                    const match = lu.type.match(/recharge_(\d+)/)
+                    if (match) recharge = parseInt(match[1])
+                  }
+
+                  const charges = lu.type === 'per_day' || lu.type === 'charges' ? (lu.count || null) : null
+
+                  return {...t, charges, chargesCurrent: charges, recharge}
+                }
+                return t
+              })
+            }
+
+            // Normalize actions
+            if (pc.actions) {
+              pc.actions = pc.actions.map(a => {
+                if (a.limitedUsage && !a.charges && !a.chargesCurrent) {
+                  const lu = a.limitedUsage
+                  let recharge = null
+                  if (lu.type === 'recharge_5_6') recharge = 5
+                  else if (lu.type === 'recharge_6') recharge = 6
+                  else if (lu.type?.startsWith('recharge_')) {
+                    const match = lu.type.match(/recharge_(\d+)/)
+                    if (match) recharge = parseInt(match[1])
+                  }
+
+                  const charges = lu.type === 'per_day' || lu.type === 'charges' ? (lu.count || null) : null
+
+                  return {...a, charges, chargesCurrent: charges, recharge}
+                }
+                return a
+              })
+            }
+
+            migratedCount++
+          }
+        }
+      }
+
+      if (migratedCount > 0) {
+        console.log(`[Migration] Converted ${migratedCount} PC(s) to new format`)
+        saveCampaigns(compendiumData.campaigns)
+      }
+
       const names = Object.keys(compendiumData.campaigns)
       if (names.length > 0) {
         compendiumData.activeCampaign = names[0]
@@ -5280,7 +7717,461 @@ function autoLoad() {
 
   const savedEncounters = loadEncounters()
   if (savedEncounters) {
-    try { enc.list = savedEncounters } catch (err) { console.error('Auto-load encounters failed:', err) }
+    try {
+      enc.list = savedEncounters
+
+      // Migrate saved encounter combatants to refresh broken/missing data from current PC state
+      let encountersMigrated = 0
+      let combatantsMigrated = 0
+
+
+      for (const campName in enc.list) {
+        const encounters = enc.list[campName] || []
+        const camp = compendiumData.campaigns[campName]
+        if (!camp) {
+          continue
+        }
+
+        const campaignPCs = Array.isArray(camp) ? camp.filter(p => !p.isNPC) : (camp.players || [])
+
+        for (const encounter of encounters) {
+          if (!encounter.combatants) continue
+
+
+          let encounterChanged = false
+
+          for (const combatant of encounter.combatants) {
+            if (!combatant.isPC) continue
+
+
+            // Find matching PC by name (combatant doesn't store original PC uid)
+            const matchingPC = campaignPCs.find(pc =>
+              (pc.name === combatant.name || pc.label === combatant.name)
+            )
+
+            if (!matchingPC) {
+              continue
+            }
+
+
+            // Check if any field needs refresh by comparing against PC's current data
+            let needsRefresh = false
+            let fieldsToRefresh = []
+
+            // Check hpMax (preserve hpCurrent - that's combat state)
+            const sourceHpMax = parseInt(matchingPC.hpMax ?? matchingPC.hpValue ?? matchingPC._draft?.hpMax ?? matchingPC._draft?.hpValue)
+            if (sourceHpMax && combatant.hpMax !== sourceHpMax) {
+              needsRefresh = true
+              fieldsToRefresh.push(`hpMax: ${combatant.hpMax} -> ${sourceHpMax}`)
+            }
+
+            // Check AC (PC Builder uses acValue, XML uses ac)
+            const sourceAC = parseInt(matchingPC.acValue ?? matchingPC.ac ?? matchingPC._draft?.acValue ?? matchingPC._draft?.ac)
+            if (sourceAC && combatant.ac !== sourceAC) {
+              needsRefresh = true
+              fieldsToRefresh.push(`ac: ${combatant.ac} -> ${sourceAC}`)
+            }
+
+            // Check spell data (selectedSpells, spellSlots, etc.)
+            const needsSpellRefresh =
+              (!combatant.selectedSpells || combatant.selectedSpells.length === 0) &&
+              (matchingPC.selectedSpells && matchingPC.selectedSpells.length > 0)
+            if (needsSpellRefresh) {
+              needsRefresh = true
+              fieldsToRefresh.push(`selectedSpells: ${combatant.selectedSpells?.length || 0} -> ${matchingPC.selectedSpells?.length || 0}`)
+            }
+
+            // Check spell slots (only if null/undefined, preserve array even if all zeros)
+            const needsSpellSlots =
+              (combatant.spellSlots === null || combatant.spellSlots === undefined) &&
+              (matchingPC.spellSlots && Array.isArray(matchingPC.spellSlots))
+            if (needsSpellSlots) {
+              needsRefresh = true
+              fieldsToRefresh.push(`spellSlots: null -> array`)
+            }
+
+            // Check abilities array
+            const abilitiesMatch = combatant.abilities && matchingPC.abilities &&
+              JSON.stringify(combatant.abilities) === JSON.stringify(matchingPC.abilities)
+            if (!abilitiesMatch && matchingPC.abilities) {
+              needsRefresh = true
+              fieldsToRefresh.push(`abilities: ${JSON.stringify(combatant.abilities)} -> ${JSON.stringify(matchingPC.abilities)}`)
+            }
+
+            // Check individual ability scores (for modifier calculations)
+            if (matchingPC.abilities) {
+              const expectedStr = parseInt(matchingPC.abilities[0]) || 10
+              const expectedDex = parseInt(matchingPC.abilities[1]) || 10
+              const expectedCon = parseInt(matchingPC.abilities[2]) || 10
+              const expectedInt = parseInt(matchingPC.abilities[3]) || 10
+              const expectedWis = parseInt(matchingPC.abilities[4]) || 10
+              const expectedCha = parseInt(matchingPC.abilities[5]) || 10
+
+              if (combatant.str !== expectedStr || combatant.dex !== expectedDex ||
+                  combatant.con !== expectedCon || combatant.int !== expectedInt ||
+                  combatant.wis !== expectedWis || combatant.cha !== expectedCha) {
+                needsRefresh = true
+                fieldsToRefresh.push(`ability scores (individual fields)`)
+              }
+            }
+
+            // Backfill notes if missing or empty (independent of other refresh checks)
+            if ((!combatant.notes || combatant.notes.length === 0) &&
+                matchingPC.notes && matchingPC.notes.length > 0) {
+              combatant.notes = [...matchingPC.notes]
+              encounterChanged = true
+              combatantsMigrated++
+              console.log(`[Encounter Migration] Backfilled notes for ${combatant.name} in "${encounter.name}" (${matchingPC.notes.length} notes)`)
+            }
+
+            // Backfill skills, savingThrows, senses, languages, and passive fields
+            if ((!combatant.skills || combatant.skills.length === 0) &&
+                matchingPC.skills && matchingPC.skills.length > 0) {
+              combatant.skills = [...matchingPC.skills]
+              encounterChanged = true
+            }
+            if ((!combatant.savingThrows || combatant.savingThrows.length === 0) &&
+                matchingPC.savingThrows && matchingPC.savingThrows.length > 0) {
+              combatant.savingThrows = [...matchingPC.savingThrows]
+              encounterChanged = true
+            }
+            if ((!combatant.senses || combatant.senses === '') && matchingPC.senses) {
+              combatant.senses = matchingPC.senses
+              encounterChanged = true
+            }
+            if ((!combatant.languages || combatant.languages === '') && matchingPC.languages) {
+              combatant.languages = matchingPC.languages
+              encounterChanged = true
+            }
+            if ((!combatant.passive || combatant.passive === '') && matchingPC.passive) {
+              combatant.passive = matchingPC.passive
+              encounterChanged = true
+            }
+            if (combatant.passiveInsight === undefined && matchingPC.passiveInsight !== undefined) {
+              combatant.passiveInsight = matchingPC.passiveInsight
+              encounterChanged = true
+            }
+            if (combatant.passiveInvestigation === undefined && matchingPC.passiveInvestigation !== undefined) {
+              combatant.passiveInvestigation = matchingPC.passiveInvestigation
+              encounterChanged = true
+            }
+
+            if (needsRefresh) {
+              console.log(`[Encounter Migration] Refreshing ${combatant.name} in "${encounter.name}"`)
+
+              // Refresh hpMax (preserve hpCurrent for in-combat damage state)
+              const sourceHpMax = parseInt(matchingPC.hpMax ?? matchingPC.hpValue ?? matchingPC._draft?.hpMax ?? matchingPC._draft?.hpValue)
+              if (sourceHpMax && combatant.hpMax !== sourceHpMax) {
+                combatant.hpMax = sourceHpMax
+              }
+
+              // Refresh AC (PC Builder uses acValue, XML uses ac)
+              const sourceAC = parseInt(matchingPC.acValue ?? matchingPC.ac ?? matchingPC._draft?.acValue ?? matchingPC._draft?.ac)
+              if (sourceAC && combatant.ac !== sourceAC) {
+                combatant.ac = sourceAC
+              }
+
+              // Refresh spell data if missing
+              if ((!combatant.selectedSpells || combatant.selectedSpells.length === 0) &&
+                  (matchingPC.selectedSpells && matchingPC.selectedSpells.length > 0)) {
+                combatant.selectedSpells = [...matchingPC.selectedSpells]
+              }
+
+              // Refresh spell slots (only if null/undefined, preserve existing array even if all zeros)
+              if ((combatant.spellSlots === null || combatant.spellSlots === undefined) &&
+                  matchingPC.spellSlots && Array.isArray(matchingPC.spellSlots)) {
+                // Build spell slots from PC's spellSlots array
+                combatant.spellSlots = matchingPC.spellSlots
+                  .map((total, i) => ({ level: i + 1, total: parseInt(total) || 0, used: 0 }))
+                  .filter(slot => slot.total > 0)
+              }
+
+              // Refresh spellcasting metadata if missing
+              if (!combatant.spellcastingType && matchingPC.spellcastingType) {
+                combatant.spellcastingType = matchingPC.spellcastingType
+              }
+              if ((combatant.spellAttackMod === null || combatant.spellAttackMod === undefined) &&
+                  (matchingPC.spellAttackMod !== null && matchingPC.spellAttackMod !== undefined)) {
+                combatant.spellAttackMod = matchingPC.spellAttackMod
+              }
+              if ((combatant.spellSaveDC === null || combatant.spellSaveDC === undefined) &&
+                  (matchingPC.spellSaveDC !== null && matchingPC.spellSaveDC !== undefined)) {
+                combatant.spellSaveDC = matchingPC.spellSaveDC
+              }
+
+              // Refresh abilities array
+              if (matchingPC.abilities) {
+                const abilitiesMatch = combatant.abilities &&
+                  JSON.stringify(combatant.abilities) === JSON.stringify(matchingPC.abilities)
+                if (!abilitiesMatch) {
+                  combatant.abilities = [...matchingPC.abilities]
+                }
+              }
+
+              // Refresh individual ability scores (for modifier calculations)
+              if (matchingPC.abilities) {
+                combatant.str = parseInt(matchingPC.abilities[0]) || 10
+                combatant.dex = parseInt(matchingPC.abilities[1]) || 10
+                combatant.con = parseInt(matchingPC.abilities[2]) || 10
+                combatant.int = parseInt(matchingPC.abilities[3]) || 10
+                combatant.wis = parseInt(matchingPC.abilities[4]) || 10
+                combatant.cha = parseInt(matchingPC.abilities[5]) || 10
+              } else if (matchingPC.str !== undefined) {
+                combatant.str = matchingPC.str || 10
+                combatant.dex = matchingPC.dex || 10
+                combatant.con = matchingPC.con || 10
+                combatant.int = matchingPC.int || 10
+                combatant.wis = matchingPC.wis || 10
+                combatant.cha = matchingPC.cha || 10
+              }
+
+              // Refresh trait uses/charges
+              if (combatant.traits && matchingPC.traits) {
+                let traitsFixed = 0
+                combatant.traits = combatant.traits.map((ct, idx) => {
+                  const matchingTrait = matchingPC.traits.find(pt => pt.name === ct.name) || matchingPC.traits[idx]
+                  if (matchingTrait) {
+                    // Get charges from source PC (check both direct field and limitedUsage)
+                    const sourceCharges = matchingTrait.charges ??
+                      (matchingTrait.limitedUsage?.type === 'per_day' || matchingTrait.limitedUsage?.type === 'charges'
+                        ? matchingTrait.limitedUsage.count
+                        : null)
+                    const sourceChargesCurrent = matchingTrait.chargesCurrent ?? sourceCharges
+
+                    // Refresh if charges/chargesCurrent are missing or don't match
+                    const chargesNeedRefresh =
+                      (ct.charges === null || ct.charges === undefined) ||
+                      (sourceCharges !== null && ct.charges !== sourceCharges)
+
+                    if (chargesNeedRefresh && sourceCharges !== null) {
+                      traitsFixed++
+                      return {
+                        ...ct,
+                        charges: sourceCharges,
+                        chargesCurrent: sourceChargesCurrent ?? sourceCharges,
+                        recharge: matchingTrait.recharge
+                      }
+                    }
+                  }
+                  return ct
+                })
+              } else {
+              }
+
+              // Refresh action uses similarly
+              if (combatant.actions && matchingPC.actions) {
+                let actionsFixed = 0
+                combatant.actions = combatant.actions.map((ca, idx) => {
+                  const matchingAction = matchingPC.actions.find(pa => pa.name === ca.name) || matchingPC.actions[idx]
+                  if (matchingAction) {
+                    // Get charges from source PC (check both direct field and limitedUsage)
+                    const sourceCharges = matchingAction.charges ??
+                      (matchingAction.limitedUsage?.type === 'per_day' || matchingAction.limitedUsage?.type === 'charges'
+                        ? matchingAction.limitedUsage.count
+                        : null)
+                    const sourceChargesCurrent = matchingAction.chargesCurrent ?? sourceCharges
+
+                    // Refresh if charges/chargesCurrent are missing or don't match
+                    const chargesNeedRefresh =
+                      (ca.charges === null || ca.charges === undefined) ||
+                      (sourceCharges !== null && ca.charges !== sourceCharges)
+
+                    if (chargesNeedRefresh && sourceCharges !== null) {
+                      actionsFixed++
+                      return {
+                        ...ca,
+                        charges: sourceCharges,
+                        chargesCurrent: sourceChargesCurrent ?? sourceCharges,
+                        recharge: matchingAction.recharge
+                      }
+                    }
+                  }
+                  return ca
+                })
+              } else {
+              }
+
+              combatantsMigrated++
+              encounterChanged = true
+            }
+          }
+
+          // Migrate NPC combatants to backfill notes
+          const campaignNPCs = Array.isArray(camp) ? camp.filter(p => p.isNPC) : (camp.npcs || [])
+          for (const combatant of encounter.combatants) {
+            if (combatant.isPC) continue // Skip PCs, already handled above
+
+            // Find matching NPC by name
+            const matchingNPC = campaignNPCs.find(npc =>
+              (npc.name === combatant.name || npc.label === combatant.name)
+            )
+
+            if (!matchingNPC) continue
+
+            // Backfill notes if missing or empty
+            if ((!combatant.notes || combatant.notes.length === 0) &&
+                matchingNPC.notes && matchingNPC.notes.length > 0) {
+              combatant.notes = [...matchingNPC.notes]
+              encounterChanged = true
+              combatantsMigrated++
+            }
+
+            // Backfill skills, savingThrows, senses, and languages for NPCs
+            if ((!combatant.skills || combatant.skills.length === 0) &&
+                matchingNPC.skills && matchingNPC.skills.length > 0) {
+              combatant.skills = [...matchingNPC.skills]
+              encounterChanged = true
+            }
+            if ((!combatant.savingThrows || combatant.savingThrows.length === 0) &&
+                matchingNPC.savingThrows && matchingNPC.savingThrows.length > 0) {
+              combatant.savingThrows = [...matchingNPC.savingThrows]
+              encounterChanged = true
+            }
+            if ((!combatant.senses || combatant.senses === '') && matchingNPC.senses) {
+              combatant.senses = matchingNPC.senses
+              encounterChanged = true
+            }
+            if ((!combatant.languages || combatant.languages === '') && matchingNPC.languages) {
+              combatant.languages = matchingNPC.languages
+              encounterChanged = true
+            }
+
+            // Backfill selectedSpells from spells for existing NPC combatants
+            if ((!combatant.selectedSpells || combatant.selectedSpells.length === 0) &&
+                combatant.spells && Array.isArray(combatant.spells) && combatant.spells.length > 0) {
+              combatant.selectedSpells = [...combatant.spells]
+              encounterChanged = true
+            }
+          }
+
+          // Migrate Monster combatants to backfill skills, saves, senses, languages, and attack data
+          for (const combatant of encounter.combatants) {
+            if (combatant.isPC) continue // Skip PCs, already handled above
+
+            // Find matching monster by name (for non-PC, non-custom combatants)
+            const matchingMonster = compendiumData.monsters.find(m =>
+              m.name === combatant.name
+            )
+
+            if (!matchingMonster) continue
+
+            // Backfill skills, savingThrows, senses, and languages for Monsters
+            // Monsters use string fields (skill, save) not arrays
+            if (combatant.skills === undefined || combatant.skills === '') {
+              combatant.skills = matchingMonster.skill || matchingMonster.skills || ''
+              if (combatant.skills) encounterChanged = true
+            }
+            if (combatant.savingThrows === undefined || combatant.savingThrows === '') {
+              combatant.savingThrows = matchingMonster.save || matchingMonster.savingThrows || ''
+              if (combatant.savingThrows) encounterChanged = true
+            }
+            if (combatant.senses === undefined || combatant.senses === '') {
+              combatant.senses = matchingMonster.senses || ''
+              if (combatant.senses) encounterChanged = true
+            }
+            if (combatant.languages === undefined || combatant.languages === '') {
+              combatant.languages = matchingMonster.languages || ''
+              if (combatant.languages) encounterChanged = true
+            }
+
+            // Backfill attack data for actions
+            if (combatant.actions && matchingMonster.actions) {
+              for (const combatantAction of combatant.actions) {
+                // Find matching source action by name
+                const sourceAction = matchingMonster.actions.find(a => a.name === combatantAction.name)
+                if (sourceAction && sourceAction.attack && !combatantAction.attack) {
+                  // Copy attack object from source
+                  combatantAction.attack = { ...sourceAction.attack }
+                  encounterChanged = true
+                }
+              }
+            }
+
+            // Backfill selectedSpells from spells for existing monster combatants
+            if ((!combatant.selectedSpells || combatant.selectedSpells.length === 0) &&
+                combatant.spells && Array.isArray(combatant.spells) && combatant.spells.length > 0) {
+              combatant.selectedSpells = [...combatant.spells]
+              encounterChanged = true
+            }
+          }
+
+          if (encounterChanged) {
+            encountersMigrated++
+
+            // Also update combatState if it exists (combat was in progress when saved)
+            if (encounter.combatState && encounter.combatState.combatants) {
+              let combatStateUpdated = 0
+
+              encounter.combatState.combatants.forEach(sc => {
+                const migratedCombatant = encounter.combatants.find(c => c.uid === sc.uid)
+                if (migratedCombatant && migratedCombatant.isPC) {
+                  const oldHpMax = sc.hpMax
+
+                  // Update static fields from migrated combatant
+                  sc.hpMax = migratedCombatant.hpMax
+                  sc.ac = migratedCombatant.ac
+
+                  // Smart hpCurrent handling: if hpCurrent equals the OLD broken hpMax,
+                  // treat it as "never damaged" and reset to new hpMax
+                  if (sc.hpCurrent === oldHpMax && oldHpMax !== migratedCombatant.hpMax) {
+                    sc.hpCurrent = migratedCombatant.hpMax
+                  } else if (sc.hpCurrent > migratedCombatant.hpMax) {
+                    // Clamp if somehow exceeds new max
+                    sc.hpCurrent = migratedCombatant.hpMax
+                  }
+                  // Otherwise preserve hpCurrent (real damage was taken)
+
+                  // Update traits and actions (deep copy to avoid reference issues)
+                  if (migratedCombatant.traits) {
+                    sc.traits = JSON.parse(JSON.stringify(migratedCombatant.traits))
+                  }
+                  if (migratedCombatant.actions) {
+                    sc.actions = JSON.parse(JSON.stringify(migratedCombatant.actions))
+                  }
+
+                  // Update spell data if missing (but preserve spellSlots if already set - combat state)
+                  if ((!sc.selectedSpells || sc.selectedSpells.length === 0) && migratedCombatant.selectedSpells) {
+                    sc.selectedSpells = JSON.parse(JSON.stringify(migratedCombatant.selectedSpells))
+                  }
+                  // Only backfill spellSlots if null (preserve existing even if all zeros = all spent)
+                  if ((sc.spellSlots === null || sc.spellSlots === undefined) && migratedCombatant.spellSlots) {
+                    sc.spellSlots = JSON.parse(JSON.stringify(migratedCombatant.spellSlots))
+                  }
+                  if (!sc.spellcastingType && migratedCombatant.spellcastingType) {
+                    sc.spellcastingType = migratedCombatant.spellcastingType
+                  }
+                  if ((sc.spellAttackMod === null || sc.spellAttackMod === undefined) &&
+                      (migratedCombatant.spellAttackMod !== null && migratedCombatant.spellAttackMod !== undefined)) {
+                    sc.spellAttackMod = migratedCombatant.spellAttackMod
+                  }
+                  if ((sc.spellSaveDC === null || sc.spellSaveDC === undefined) &&
+                      (migratedCombatant.spellSaveDC !== null && migratedCombatant.spellSaveDC !== undefined)) {
+                    sc.spellSaveDC = migratedCombatant.spellSaveDC
+                  }
+
+                  // Backfill notes if missing or empty
+                  if ((!sc.notes || sc.notes.length === 0) &&
+                      migratedCombatant.notes && migratedCombatant.notes.length > 0) {
+                    sc.notes = JSON.parse(JSON.stringify(migratedCombatant.notes))
+                  }
+
+                  combatStateUpdated++
+                }
+              })
+
+              if (combatStateUpdated > 0) {
+              }
+            }
+          }
+        }
+      }
+
+      if (combatantsMigrated > 0) {
+        console.log(`[Encounter Migration] Refreshed ${combatantsMigrated} combatant(s) in ${encountersMigrated} encounter(s)`)
+        saveEncounters(enc.list)
+      }
+
+    } catch (err) { console.error('Auto-load encounters failed:', err) }
   }
 
   // Re-render nav bar if campaigns were loaded (to show campaign selector)
@@ -5325,6 +8216,7 @@ function renderDiceRoller() {
   }
 
   const totalSelected = Object.values(diceState.counts).reduce((sum, count) => sum + count, 0)
+  const showLabels = localStorage.getItem('showDieLabels') === 'true'
 
   container.innerHTML = `
     <!-- History Panel -->
@@ -5378,6 +8270,14 @@ function renderDiceRoller() {
             onmouseout="this.style.borderColor='#445E22';this.style.background='#1E231A'">
             <img src="${dieImages[die]}" alt="${die}"
                  style="width:44px;height:44px;object-fit:contain;pointer-events:none;" />
+            ${showLabels ? `
+              <div style="position:absolute;top:50%;left:50%;transform:translate(-50%, -50%);
+                          color:#7B9BA8;font-weight:bold;font-size:12px;
+                          font-family:var(--app-font);pointer-events:none;
+                          text-shadow: -1px -1px 0 #1E231A, 1px -1px 0 #1E231A, -1px 1px 0 #1E231A, 1px 1px 0 #1E231A;">
+                ${die}
+              </div>
+            ` : ''}
             ${count > 0 ? `
               <div style="position:absolute;top:-4px;right:-4px;
                           background:#4587A2;color:#ffffff;border-radius:50%;
@@ -5432,7 +8332,7 @@ function renderDiceRoller() {
              font-size:${diceState.open ? '24px' : '0'};font-weight:normal;padding:0;"
       onmouseover="this.style.borderColor='#4a9a9a';this.style.background='#2a3a2a'"
       onmouseout="this.style.borderColor='#445E22';this.style.background='#1E231A'">
-      ${diceState.open ? 'X' : `<img src="${dieImages.d20}" alt="d20" style="width:48px;height:48px;object-fit:contain;pointer-events:none;" />`}
+      ${diceState.open ? '&times;' : `<img src="${dieImages.d20}" alt="d20" style="width:48px;height:48px;object-fit:contain;pointer-events:none;" />`}
     </button>
   `
 }
@@ -5444,9 +8344,10 @@ function toggleHistory() {
 
 function toggleDiceTray() {
   if (diceState.open) {
-    // Close the tray
+    // Close the tray and reset dice
     diceState.open = false
     diceState.historyOpen = false
+    diceState.counts = { d2: 0, d4: 0, d6: 0, d8: 0, d10: 0, d12: 0, d20: 0, d100: 0 }
   } else {
     // Open the tray
     diceState.open = true
@@ -5543,8 +8444,9 @@ function showDiceResult(total, breakdown) {
   }
 
   if (!tail) {
-    tail = document.createElement('div')
+    tail = document.createElement('img')
     tail.id = 'dice-result-tail'
+    tail.src = 'assets/Ignacious_Speech.png'
     document.body.appendChild(tail)
   }
 
@@ -5553,9 +8455,9 @@ function showDiceResult(total, breakdown) {
     position:fixed;
     top:230px;
     left:30px;
-    background:#2a2a2a;
-    border:2px solid #4a9a9a;
-    color:#e0d5c5;
+    background:#EEEEEE;
+    border:2px solid #0E1412;
+    color:#0E1412;
     padding:16px 20px;
     border-radius:12px;
     font-family:var(--app-font);
@@ -5568,27 +8470,24 @@ function showDiceResult(total, breakdown) {
     transform:translateY(-10px);
   `
 
-  // Tail pointing upward
+  // Tail pointing upward - image connector between Ignacious mouth and bubble
   tail.style.cssText = `
     position:fixed;
-    top:220px;
-    left:110px;
-    width:0;
-    height:0;
-    border-left:10px solid transparent;
-    border-right:10px solid transparent;
-    border-bottom:14px solid #4a9a9a;
+    top:100px;
+    left:-45px;
+    width:210px;
+    height:auto;
     opacity:0;
     transition:opacity .3s;
     pointer-events:none;
-    z-index:9999;
+    z-index:10000;
   `
 
   bubble.innerHTML = `
-    <div style="font-size:32px;font-weight:bold;margin-bottom:8px;color:#c9a87c;">
+    <div style="font-size:32px;font-weight:bold;margin-bottom:8px;color:#0E1412;">
       ${total}
     </div>
-    <div style="font-size:12px;color:#888;line-height:1.4;">
+    <div style="font-size:12px;color:#0E1412;line-height:1.4;">
       ${breakdown}
     </div>
   `
@@ -5613,10 +8512,286 @@ function showDiceResult(total, breakdown) {
 window.toggleDiceTray = toggleDiceTray
 window.toggleHistory = toggleHistory
 window.incrementDie = incrementDie
+// ── Combat Roll Functions ─────────────────────────────────────────
+function rollAttack(combatantUid, actionName, attackData) {
+  const combatant = enc.current?.combatants?.find(c => c.uid === combatantUid)
+  if (!combatant) return
+
+  // Safety check: if atk is "—" (no attack roll), return early
+  if (attackData.atk === '—') return
+
+  // Parse attack bonus - handle multiple formats
+  let atkBonus = 0
+  if (attackData.atk !== undefined) {
+    // New structured format with atk field
+    const atkStr = String(attackData.atk || '0')
+    const match = atkStr.match(/[\+\-]?\d+/)
+    if (match) atkBonus = parseInt(match[0])
+  } else if (attackData.bonus !== undefined) {
+    // Very old legacy format
+    atkBonus = parseInt(attackData.bonus) || 0
+  }
+
+  // Roll 1d20
+  const d20Roll = Math.floor(Math.random() * 20) + 1
+  const total = d20Roll + atkBonus
+
+  // Format breakdown
+  const breakdown = `d20(${d20Roll}) ${atkBonus >= 0 ? '+' : ''}${atkBonus}`
+
+  // Add to history
+  const now = new Date()
+  const timestamp = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+  diceState.history.push({
+    timestamp,
+    dice: `${combatant.name} Attack - ${actionName}:`,
+    breakdown,
+    total
+  })
+
+  // Show result
+  showDiceResult(total, breakdown)
+  renderDiceRoller()
+}
+
+function rollDamage(combatantUid, actionName, attackData, damageType = 'standard') {
+  const combatant = enc.current?.combatants?.find(c => c.uid === combatantUid)
+  if (!combatant) {
+    console.error('[rollDamage] Combatant not found:', combatantUid)
+    return
+  }
+
+  let diceCount, dieType, dmgBonus, dmgType
+
+  // Check if alternate damage was requested
+  const useAlternate = damageType === 'alternate' && attackData.altDiceCount
+
+  // Use alternate damage if requested, otherwise standard
+  if (useAlternate) {
+    diceCount = parseInt(attackData.altDiceCount) || 0
+    dieType = attackData.altDieType || 'd6'
+    const bonusStr = String(attackData.altDmgBonus || '0').replace(/^\+/, '')
+    dmgBonus = parseInt(bonusStr) || 0
+    dmgType = attackData.altDmgType || ''
+  } else if (attackData.diceCount !== undefined || attackData.dieType !== undefined) {
+    // New structured format (standard damage)
+    diceCount = parseInt(attackData.diceCount) || 0
+    dieType = attackData.dieType || 'd6'
+    // Parse bonus more robustly - handle "+5", "5", "-2", etc.
+    const bonusStr = String(attackData.dmgBonus || '0').replace(/^\+/, '')  // Remove leading +
+    dmgBonus = parseInt(bonusStr) || 0
+    dmgType = attackData.dmgType || ''
+  } else if (attackData.dmg) {
+    // Old format - has dmg string but no structured fields
+    // Parse dmg string at roll time using parseDamageString()
+    const parsed = parseDamageString(attackData.dmg)
+    diceCount = parseInt(parsed.diceCount) || 0
+    dieType = parsed.dieType || 'd6'
+    // Parse bonus more robustly
+    const bonusStr = String(parsed.dmgBonus || '0').replace(/^\+/, '')  // Remove leading +
+    dmgBonus = parseInt(bonusStr) || 0
+    dmgType = parsed.dmgType || attackData.dmgType || ''
+  } else {
+    // No damage data - old custom monster that needs re-saving
+    console.warn('[rollDamage] No damage data found in attackData:', attackData)
+    showDiceResult('No Damage Data', `${combatant.name}'s ${actionName} has no damage configured. Edit the monster to add damage.`)
+    return
+  }
+
+  // Validate we have at least dice or a bonus
+  if (diceCount === 0 && dmgBonus === 0) {
+    console.warn('[rollDamage] No dice count or bonus - cannot roll damage')
+    showDiceResult('No Damage', 'Edit monster to configure damage dice')
+    return
+  }
+
+  // Roll primary damage dice
+  const dieSize = parseInt(dieType.substring(1)) || 6
+  const rolls = []
+  let diceTotal = 0
+
+  for (let i = 0; i < diceCount; i++) {
+    const roll = Math.floor(Math.random() * dieSize) + 1
+    rolls.push(roll)
+    diceTotal += roll
+  }
+
+  let total = diceTotal + dmgBonus
+
+  // Format breakdown
+  let breakdown = ''
+  if (diceCount > 0) {
+    breakdown = `${diceCount}${dieType}(${rolls.join(',')})`
+    if (dmgBonus !== 0) {
+      breakdown += ` ${dmgBonus >= 0 ? '+' : ''}${dmgBonus}`
+    }
+  } else {
+    // Flat damage
+    breakdown = String(dmgBonus)
+  }
+
+  // Add primary damage type to breakdown
+  if (dmgType) {
+    breakdown += ` ${dmgType}`
+  }
+
+  // Roll additional damage if present
+  const additionalDiceCount = parseInt(attackData.additionalDiceCount) || 0
+  if (additionalDiceCount > 0 && attackData.additionalDieType) {
+    const additionalDieType = attackData.additionalDieType
+    const additionalDieSize = parseInt(additionalDieType.substring(1)) || 6
+    const additionalRolls = []
+    let additionalTotal = 0
+
+    for (let i = 0; i < additionalDiceCount; i++) {
+      const roll = Math.floor(Math.random() * additionalDieSize) + 1
+      additionalRolls.push(roll)
+      additionalTotal += roll
+    }
+
+    total += additionalTotal
+    breakdown += ` + ${additionalDiceCount}${additionalDieType}(${additionalRolls.join(',')})`
+
+    // If additional damage has a specific type, show it
+    if (attackData.additionalDmgType) {
+      breakdown += ` ${attackData.additionalDmgType}`
+    }
+  }
+
+  // Add to history
+  const now = new Date()
+  const timestamp = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+
+  // Label for roll type
+  const typeLabel = useAlternate ? ' (Alternate)' : (damageType === 'standard' ? ' (Standard)' : '')
+
+  diceState.history.push({
+    timestamp,
+    dice: `${combatant.name} Damage - ${actionName}${typeLabel}:`,
+    breakdown,
+    total
+  })
+
+  // Show result
+  showDiceResult(total, breakdown)
+  renderDiceRoller()
+}
+
+function showDamagePopup(combatantUid, actionName, attackData, buttonEl) {
+  // Close any existing popup
+  const existing = document.getElementById('damage-type-popup')
+  if (existing) existing.remove()
+
+  // Create popup
+  const popup = document.createElement('div')
+  popup.id = 'damage-type-popup'
+  popup.style.cssText = `
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background: #262F35;
+    border: 2px solid #4a9a9a;
+    border-radius: 4px;
+    padding: 4px;
+    min-width: 180px;
+    z-index: 1000;
+    font-family: var(--app-font);
+    font-size: 12px;
+  `
+
+  // Build standard damage label
+  const stdDiceCount = attackData.diceCount || '0'
+  const stdDieType = attackData.dieType || 'd6'
+  const stdBonus = attackData.dmgBonus || ''
+  const stdType = attackData.dmgType || ''
+  const stdLabel = `${stdDiceCount}${stdDieType}${stdBonus ? ' ' + stdBonus : ''}${stdType ? ' ' + stdType : ''}`
+
+  // Build alternate damage label
+  const altDiceCount = attackData.altDiceCount || '0'
+  const altDieType = attackData.altDieType || 'd6'
+  const altBonus = attackData.altDmgBonus || ''
+  const altType = attackData.altDmgType || ''
+  const altLabel = `${altDiceCount}${altDieType}${altBonus ? ' ' + altBonus : ''}${altType ? ' ' + altType : ''}`
+
+  popup.innerHTML = `
+    <div onclick="rollDamage('${combatantUid}','${actionName.replace(/'/g, "\\'")}',${JSON.stringify(attackData).replace(/"/g, '&quot;')},'standard');document.getElementById('damage-type-popup').remove()"
+         style="padding: 6px 10px; cursor: pointer; border-radius: 3px; margin-bottom: 2px; color: #e0d5c5;"
+         onmouseover="this.style.background='#0f3460'"
+         onmouseout="this.style.background='transparent'">
+      Standard: ${stdLabel}
+    </div>
+    <div onclick="rollDamage('${combatantUid}','${actionName.replace(/'/g, "\\'")}',${JSON.stringify(attackData).replace(/"/g, '&quot;')},'alternate');document.getElementById('damage-type-popup').remove()"
+         style="padding: 6px 10px; cursor: pointer; border-radius: 3px; color: #e0d5c5;"
+         onmouseover="this.style.background='#0f3460'"
+         onmouseout="this.style.background='transparent'">
+      Alternate: ${altLabel}
+    </div>
+  `
+
+  // Position popup relative to button
+  buttonEl.parentElement.style.position = 'relative'
+  buttonEl.parentElement.appendChild(popup)
+
+  // Close popup when clicking outside
+  setTimeout(() => {
+    const closeHandler = (e) => {
+      if (!popup.contains(e.target) && e.target !== buttonEl) {
+        popup.remove()
+        document.removeEventListener('click', closeHandler)
+      }
+    }
+    document.addEventListener('click', closeHandler)
+  }, 10)
+}
+
 window.resetDie = resetDie
 window.startLongPress = startLongPress
 window.cancelLongPress = cancelLongPress
 window.rollDice = rollDice
+window.rollAttack = rollAttack
+window.rollDamage = rollDamage
+window.showDamagePopup = showDamagePopup
+window.toggleNotesSection = toggleNotesSection
+window.editNote = editNote
+
+// ── Bullet point keyboard shortcut ────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  // Check for Cmd+. (Mac) or Ctrl+. (Windows)
+  if ((e.metaKey || e.ctrlKey) && e.key === '.') {
+    const target = e.target
+    // Only apply to textarea and text input elements
+    if (target.tagName === 'TEXTAREA' || (target.tagName === 'INPUT' && target.type === 'text')) {
+      e.preventDefault()
+
+      const start = target.selectionStart
+      const value = target.value
+
+      // Find the start of the current line
+      let lineStart = start
+      while (lineStart > 0 && value[lineStart - 1] !== '\n') {
+        lineStart--
+      }
+
+      // Check if line already starts with bullet
+      const lineContent = value.substring(lineStart)
+      if (!lineContent.startsWith('• ')) {
+        // Insert bullet at line start
+        const before = value.substring(0, lineStart)
+        const after = value.substring(lineStart)
+        target.value = before + '• ' + after
+
+        // Move cursor after the bullet
+        target.selectionStart = target.selectionEnd = start + 2
+
+        // Trigger change event for frameworks/listeners
+        target.dispatchEvent(new Event('input', { bubbles: true }))
+        target.dispatchEvent(new Event('change', { bubbles: true }))
+      }
+    }
+  }
+})
 
 // ── Boot ──────────────────────────────────────────────────────────
 window.addEventListener('DOMContentLoaded', () => {

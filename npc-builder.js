@@ -30,9 +30,115 @@ function openNPCBuilder(uid = null) {
       npcb.draft.initiativeBonus = Math.floor((dex - 10) / 2)
     }
 
-    // Set mb.draft for monster builder render functions
-    mb.draft = npcb.draft
-    mb.originalName = npcb.draft.name
+    // Set mb.draft for monster builder render functions (if mb is available)
+    // Normalize NPC action format to Monster Builder format before setting
+    if (typeof window.mb !== 'undefined') {
+      window.mb.draft = {...npcb.draft}
+
+      // Normalize actions using parseAttackFromText to convert NPC format to Monster format
+      // NPC format: {bonus:7, dmg:"1d6+2"} → Monster format: {atk:"+7", diceCount:"1", dieType:"d6", ...}
+      function normalizeActions(actions) {
+        if (!actions || !Array.isArray(actions)) return actions
+        return actions.map(action => {
+          if (!action.attack) return action
+
+          // Read attack bonus from NPC format (bonus:number) or Monster format (atk:string)
+          let atkBonus = action.attack.atk || (action.attack.bonus !== undefined ?
+            (action.attack.bonus >= 0 ? `+${action.attack.bonus}` : String(action.attack.bonus)) : '+0')
+
+          // Parse damage string if it exists
+          let attack = {
+            atk: atkBonus,
+            diceCount: action.attack.diceCount || '',
+            dieType: action.attack.dieType || 'd6',
+            dmgBonus: action.attack.dmgBonus || '',
+            dmgType: action.attack.dmgType || '',
+            additionalDiceCount: action.attack.additionalDiceCount || '',
+            additionalDieType: action.attack.additionalDieType || '',
+            additionalDmgType: action.attack.additionalDmgType || '',
+            showAdditional: action.attack.showAdditional || false,
+            altDiceCount: action.attack.altDiceCount || '',
+            altDieType: action.attack.altDieType || '',
+            altDmgBonus: action.attack.altDmgBonus || '',
+            altDmgType: action.attack.altDmgType || '',
+            showAlternate: action.attack.showAlternate || false
+          }
+
+          // If dmg string exists, parse it to populate structured fields
+          if (action.attack.dmg && window.parseDamageString) {
+            const parsed = window.parseDamageString(action.attack.dmg)
+            attack.diceCount = parsed.diceCount
+            attack.dieType = parsed.dieType
+            attack.dmgBonus = parsed.dmgBonus
+            attack.dmgType = parsed.dmgType
+            attack.additionalDiceCount = parsed.additionalDiceCount || ''
+            attack.additionalDieType = parsed.additionalDieType || ''
+            attack.additionalDmgType = parsed.additionalDmgType || ''
+            attack.showAdditional = (parsed.additionalDiceCount || '') !== ''
+          }
+
+          // Parse from description text - always run if desc is available
+          // Description text is the most reliable source for attack bonus
+          const textParsed = window.parseAttackFromText && action.desc
+            ? window.parseAttackFromText(action.desc)
+            : null
+
+          if (textParsed) {
+            // Always use text-parsed atk (description is most reliable source)
+            if (textParsed.atk) {
+              attack.atk = textParsed.atk
+            }
+            // Only fill in missing damage fields from text (don't override parsed dmg)
+            if (!attack.diceCount && textParsed.diceCount) {
+              attack.diceCount = textParsed.diceCount
+            }
+            if (!attack.dieType && textParsed.dieType) {
+              attack.dieType = textParsed.dieType
+            }
+            if (!attack.dmgBonus && textParsed.dmgBonus) {
+              attack.dmgBonus = textParsed.dmgBonus
+            }
+            if (!attack.dmgType && textParsed.dmgType) {
+              attack.dmgType = textParsed.dmgType
+            }
+            // Copy alternate damage fields if present
+            if (textParsed.altDiceCount) {
+              attack.altDiceCount = textParsed.altDiceCount
+              attack.altDieType = textParsed.altDieType
+              attack.altDmgBonus = textParsed.altDmgBonus
+              attack.altDmgType = textParsed.altDmgType
+              attack.showAlternate = true
+
+              // FIX: Prevent double-counting - if additional damage matches alternate damage, clear additional
+              // This happens when parseDamageString() extracts "or 3d4" as additional dice
+              if (attack.altDiceCount === attack.additionalDiceCount &&
+                  attack.altDieType === attack.additionalDieType) {
+                attack.additionalDiceCount = ''
+                attack.additionalDieType = ''
+                attack.additionalDmgType = ''
+                attack.showAdditional = false
+              }
+            }
+          }
+
+          // Return with ALL original fields preserved, only attack field overridden
+          return {
+            ...action,                    // Preserve ALL original fields (id, name, desc, limitedUsage, etc.)
+            attack: attack                // Override only the attack with normalized version
+          }
+        })
+      }
+
+      // Normalize all action types
+      window.mb.draft.traits = normalizeActions(npcb.draft.traits)
+      window.mb.draft.actions = normalizeActions(npcb.draft.actions)
+      window.mb.draft.bonusActions = normalizeActions(npcb.draft.bonusActions)
+      window.mb.draft.reactions = normalizeActions(npcb.draft.reactions)
+      window.mb.draft.legendaryActions = normalizeActions(npcb.draft.legendaryActions)
+      window.mb.draft.lairActions = normalizeActions(npcb.draft.lairActions)
+
+      window.mb.originalName = npcb.draft.name
+    }
   } else {
     npcb.draft = null
     npcb.originalUid = null
@@ -145,7 +251,6 @@ function npcbDraftFromNPC(npc) {
         // Start from the monster's data
         const monsterDraft = npcbDraftFromMonster(baseMonster)
         Object.assign(d, monsterDraft)
-        console.log('[npcbDraftFromNPC] after monster draft assign - d.selectedSpells:', d.selectedSpells?.length, d.selectedSpells)
 
         // Preserve NPC identity fields (don't use monster's name/properName)
         d.properName = npc.properName || npc.label || ''
@@ -598,7 +703,7 @@ function npcbFilterMonsters(query) {
       <div style="font-weight:bold;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
         ${m.name}
       </div>
-      <div style="font-size:12px;color:#C8C8C8;">${m.size} ${m.type}</div>
+      <div style="font-size:12px;color:#C8C8C8;">${window.expandSize ? window.expandSize(m.size) : m.size} ${m.type}</div>
       <div style="font-size:12px;color:#C8C8C8;">CR ${m.cr || '—'}</div>
     </div>
   `).join('')
@@ -673,8 +778,8 @@ function npcbRenderForm() {
       ${window.mbCardWrap('LANGUAGES', window.mbRenderLanguages())}
       ${window.mbCardWrap('TRAITS', `<div id="mb-sect-traits">${window.mbRenderAbilityGroup('traits', false)}</div>`)}
       ${window.mbCardWrap('ACTIONS', `<div id="mb-sect-actions">${window.mbRenderAbilityGroup('actions', true)}</div>`)}
-      ${window.mbCardWrap('BONUS ACTIONS', `<div id="mb-sect-bonusActions">${window.mbRenderAbilityGroup('bonusActions', false)}</div>`)}
-      ${window.mbCardWrap('REACTIONS', `<div id="mb-sect-reactions">${window.mbRenderAbilityGroup('reactions', false)}</div>`)}
+      ${window.mbCardWrap('BONUS ACTIONS', `<div id="mb-sect-bonusActions">${window.mbRenderAbilityGroup('bonusActions', true)}</div>`)}
+      ${window.mbCardWrap('REACTIONS', `<div id="mb-sect-reactions">${window.mbRenderAbilityGroup('reactions', true)}</div>`)}
       ${window.mbCardWrap('LEGENDARY ACTIONS', `<div id="mb-sect-legendaryActions">${window.mbRenderAbilityGroup('legendaryActions', true)}</div>`)}
       ${window.mbCardWrap('LAIR ACTIONS', `<div id="mb-sect-lairActions">${window.mbRenderAbilityGroup('lairActions', true)}</div>`)}
       ${window.mbCardWrap('SPELLS', `<div id="mb-sect-Spells">${window.mbRenderSpells()}</div>`)}
@@ -706,7 +811,7 @@ function npcbRenderProperName() {
 function npcbRenderStatBlockHeader() {
   // Clone mbRenderHeader but change "NAME" label to "STAT BLOCK NAME"
   const headerHTML = window.mbRenderHeader()
-  const labelStyle = 'display:block;font-size:10px;color:#8b0000;letter-spacing:.1em;font-weight:700;margin-bottom:5px;'
+  const labelStyle = 'display:block;font-size:10px;color:#7B9BA8;letter-spacing:.1em;font-weight:700;margin-bottom:5px;'
   return headerHTML.replace(
     `<label style="${labelStyle}">NAME</label>`,
     `<label style="${labelStyle}">STAT BLOCK NAME</label>`
@@ -766,12 +871,14 @@ function npcbAddNote() {
 }
 
 function npcbRemoveNote(idx) {
-  npcb.draft.notes.splice(idx, 1)
-  npcb.dirty = true
-  const list = document.getElementById('npcb-notes-list')
-  if (list) {
-    list.innerHTML = npcb.draft.notes.map((note, i) => npcbRenderNote(note, i)).join('')
-  }
+  window.confirmDelete('Delete note?', () => {
+    npcb.draft.notes.splice(idx, 1)
+    npcb.dirty = true
+    const list = document.getElementById('npcb-notes-list')
+    if (list) {
+      list.innerHTML = npcb.draft.notes.map((note, i) => npcbRenderNote(note, i)).join('')
+    }
+  })
 }
 
 function npcbBuildEntry(d) {
@@ -908,7 +1015,7 @@ function npcbBack() {
                  cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
           Cancel
         </button>
-        <button onclick="document.getElementById('npcb-discard-overlay').remove();if(typeof popNav==='function')popNav();else showSection('home')"
+        <button onclick="document.getElementById('npcb-discard-overlay').remove();npcb.draft=null;npcb.dirty=false;if(window.mb)window.mb.dirty=false;if(typeof popNav==='function')popNav();else showSection('home')"
           style="background:#8b0000;color:#e0d5c5;border:none;padding:8px 20px;
                  cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
           Discard
