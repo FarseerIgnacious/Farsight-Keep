@@ -822,7 +822,7 @@ npm start
 ## Contact & Support
 
 **Developer**: Farsight Keep Team  
-**Email**: generalpepahment@gmail.com  
+**Email**: 307265924+FarseerIgnacious@users.noreply.github.com  
 **Repository**: (GitHub link when published)  
 **License**: (TBD)
 
