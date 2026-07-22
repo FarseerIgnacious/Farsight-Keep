@@ -87,7 +87,9 @@
       "Bash(codesign -dv \"/Users/caleb/Desktop/dm-companion/dist/mac-universal/Farsight Keep.app\")",
       "Bash(mkdir -p /tmp/flattest)",
       "Bash(npx --yes electron-icon-builder --input=/tmp/flat-red-icon.png --output=/tmp/flattest/icons --flatten)",
-      "Bash(sort -t: -k1 -n)"
+      "Bash(sort -t: -k1 -n)",
+      "Bash(rm -rf /tmp/shots)",
+      "Bash(rm -f /private/tmp/claude-501/-Users-caleb-Desktop-dm-companion/d2a7f98b-d6fe-4813-bd6d-0f6f20d21164/scratchpad/coffee-click-result.txt)"
     ]
   }
 }

@@ -1,4 +1,10 @@
 const { saveCompendium, loadCompendium, saveCampaigns, loadCampaigns, saveEncounters, loadEncounters, saveHasSeenWelcome, loadHasSeenWelcome } = require('./storage.js')
+const { shell } = require('electron')
+
+function openBuyMeACoffee() {
+  shell.openExternal('https://buymeacoffee.com/farseerignacious')
+}
+window.openBuyMeACoffee = openBuyMeACoffee
 
 // ── Size Expansion Utility ────────────────────────────────────────
 // Converts single-letter size abbreviations to full names
@@ -1744,6 +1750,13 @@ function openSettings() {
           mind. HOWEVER, the code for this program was completely made using AI, and Iggy
           and I feel it necessary to communicate this to all prospective users of Farsight Keep.
         </div>
+
+        <button onclick="openBuyMeACoffee()"
+          style="${btnStyle}margin-top:16px;"
+          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+          onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+          &#9749; Buy Me a Coffee
+        </button>
       </div>
       </div>
     </div>
