@@ -34,6 +34,7 @@
       "!.gitignore"
     ],
     "mac": {
+      "icon": "assets/icons/icon.icns",
       "category": "public.app-category.utilities",
       "target": [
         { "target": "dmg", "arch": ["universal"] },
@@ -41,9 +42,11 @@
       ]
     },
     "win": {
+      "icon": "assets/icons/icon.ico",
       "target": "nsis"
     },
     "linux": {
+      "icon": "assets/icons/icon.png",
       "target": [
         "AppImage",
         "deb"
