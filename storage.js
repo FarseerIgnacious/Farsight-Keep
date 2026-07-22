@@ -4,9 +4,10 @@ const os   = require('os')
 const { ipcRenderer } = require('electron')
 
 const DATA_DIR  = ipcRenderer.sendSync('get-user-data-path')
-const COMP_FILE = path.join(DATA_DIR, 'compendium.json')
-const CAMP_FILE = path.join(DATA_DIR, 'campaigns.json')
-const ENC_FILE  = path.join(DATA_DIR, 'encounters.json')
+const COMP_FILE    = path.join(DATA_DIR, 'compendium.json')
+const CAMP_FILE    = path.join(DATA_DIR, 'campaigns.json')
+const ENC_FILE     = path.join(DATA_DIR, 'encounters.json')
+const WELCOME_FILE = path.join(DATA_DIR, 'welcome.json')
 
 function ensureDir() {
   if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true })
@@ -71,4 +72,19 @@ function loadEncounters() {
   } catch(e) { return null }
 }
 
-module.exports = { saveCompendium, loadCompendium, saveCampaigns, loadCampaigns, saveEncounters, loadEncounters }
+function saveHasSeenWelcome(seen) {
+  ensureDir()
+  fs.writeFileSync(WELCOME_FILE, JSON.stringify({ hasSeenWelcome: seen }), 'utf8')
+}
+
+function loadHasSeenWelcome() {
+  try {
+    if (!fs.existsSync(WELCOME_FILE)) return false
+    return JSON.parse(fs.readFileSync(WELCOME_FILE, 'utf8')).hasSeenWelcome === true
+  } catch(e) { return false }
+}
+
+module.exports = {
+  saveCompendium, loadCompendium, saveCampaigns, loadCampaigns, saveEncounters, loadEncounters,
+  saveHasSeenWelcome, loadHasSeenWelcome
+}

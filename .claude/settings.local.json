@@ -65,7 +65,29 @@
       "Bash(plutil -p \"/Users/caleb/Desktop/dm-companion/node_modules/electron/dist/Electron.app/Contents/Info.plist\")",
       "Bash(mkdir -p /private/tmp/claude-501/-Users-caleb-Desktop-dm-companion/d2a7f98b-d6fe-4813-bd6d-0f6f20d21164/scratchpad/electron-app-test)",
       "Bash(/Users/caleb/Desktop/dm-companion/node_modules/.bin/electron .)",
-      "Bash(echo \"EXIT: $?\")"
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(mv assets/icons/icons/* assets/icons/)",
+      "Bash(rmdir assets/icons/icons)",
+      "Bash(cp assets/icons/1024x1024.png assets/icons/icon.png)",
+      "Bash(rm -f farsight-icon-preview.png)",
+      "Bash(qlmanage -t -s 512 -o /tmp \"/Users/caleb/Desktop/dm-companion/dist/mac-universal/Farsight Keep.app\")",
+      "Bash(kill -9 75529 75535)",
+      "Bash(screencapture -x /tmp/shots/welcome-test.png)",
+      "Bash(screencapture -x /tmp/shots/welcome-test2.png)",
+      "Bash(pip3 list *)",
+      "Bash(pip3 install *)",
+      "Bash(cp assets/Farsight_Keep_Icon.png assets/Farsight_Keep_Icon_original_unpadded.png)",
+      "Bash(cp assets/Farsight_Keep_Icon_padded.png assets/Farsight_Keep_Icon.png)",
+      "Bash(rm assets/Farsight_Keep_Icon_padded.png)",
+      "Bash(rm -rf assets/icons)",
+      "Bash(npx electron-icon-builder *)",
+      "Bash(cp -R \"/Users/caleb/Desktop/dm-companion/dist/mac-universal/Farsight Keep.app\" \"/tmp/icon-test-fresh/FreshIconTest-$\\(date +%s 2>/dev/null || echo 1\\).app\")",
+      "Bash(cp -R \"/Users/caleb/Desktop/dm-companion/dist/mac-universal/Farsight Keep.app\" \"/tmp/icon-test-fresh/FreshIconTestXYZ.app\")",
+      "Bash(codesign -dv \"/Applications/Discord.app\")",
+      "Bash(codesign -dv \"/Users/caleb/Desktop/dm-companion/dist/mac-universal/Farsight Keep.app\")",
+      "Bash(mkdir -p /tmp/flattest)",
+      "Bash(npx --yes electron-icon-builder --input=/tmp/flat-red-icon.png --output=/tmp/flattest/icons --flatten)",
+      "Bash(sort -t: -k1 -n)"
     ]
   }
 }

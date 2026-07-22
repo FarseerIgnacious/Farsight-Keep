@@ -1,4 +1,4 @@
-const { saveCompendium, loadCompendium, saveCampaigns, loadCampaigns, saveEncounters, loadEncounters } = require('./storage.js')
+const { saveCompendium, loadCompendium, saveCampaigns, loadCampaigns, saveEncounters, loadEncounters, saveHasSeenWelcome, loadHasSeenWelcome } = require('./storage.js')
 
 // ── Size Expansion Utility ────────────────────────────────────────
 // Converts single-letter size abbreviations to full names
@@ -1399,6 +1399,106 @@ function toggleExportSection() {
 }
 window.toggleExportSection = toggleExportSection
 
+// ── First-Run Welcome Modal ───────────────────────────────────────
+function closeWelcomeModal() {
+  const modal = document.getElementById('welcome-modal')
+  if (modal) modal.remove()
+  saveHasSeenWelcome(true)
+
+  const ignacious = document.getElementById('ignacious-container')
+  if (ignacious) ignacious.style.display = ''
+  const diceRoller = document.getElementById('dice-roller-container')
+  if (diceRoller) diceRoller.style.display = ''
+}
+window.closeWelcomeModal = closeWelcomeModal
+
+function openSettingsFromWelcome() {
+  closeWelcomeModal()
+  openSettings()
+}
+window.openSettingsFromWelcome = openSettingsFromWelcome
+
+function showWelcomeModal() {
+  const existing = document.getElementById('welcome-modal')
+  if (existing) existing.remove()
+
+  const ignacious = document.getElementById('ignacious-container')
+  if (ignacious) ignacious.style.display = 'none'
+  const diceRoller = document.getElementById('dice-roller-container')
+  if (diceRoller) diceRoller.style.display = 'none'
+
+  const modal = document.createElement('div')
+  modal.id = 'welcome-modal'
+  modal.style.cssText = `
+    position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:2100;
+    display:flex;align-items:center;justify-content:center;
+  `
+
+  const bodyPara1 = renderMarkdown(
+    'I am Ignacious, your humble servant. You may call me Iggy if you so desire. ' +
+    'I keep watch over these decrepit halls, and with my arcane tablets I perceive all ' +
+    'possibilities. The grand tales however, are *yours* to craft!'
+  )
+  const bodyPara2 = renderMarkdown(
+    'To begin our work: import your existing campaign data **(XML)** from Settings, or ' +
+    '**create a new campaign** to begin with an empty slate.'
+  )
+
+  modal.innerHTML = `
+    <style>
+      #welcome-text-overlay::-webkit-scrollbar { display: none; }
+    </style>
+    <div style="position:relative;width:min(700px, 92vw);aspect-ratio:3214/2993;">
+      <img src="assets/Welcome_Asset.png" alt="Ignacious"
+        style="width:100%;height:100%;object-fit:contain;display:block;" />
+
+      <button onclick="closeWelcomeModal()"
+        style="position:absolute;top:1%;right:2%;background:none;border:none;
+               color:#e0d5c5;cursor:pointer;font-size:26px;line-height:1;padding:4px 8px;
+               text-shadow:0 0 6px #000, 0 0 6px #000;"
+        onmouseover="this.style.color='#4a9a9a'"
+        onmouseout="this.style.color='#e0d5c5'">×</button>
+
+      <div id="welcome-text-overlay" style="position:absolute;left:23%;top:58%;width:58%;height:20%;
+                  box-sizing:border-box;padding:1% 2%;overflow-y:auto;scrollbar-width:none;
+                  display:flex;flex-direction:column;justify-content:center;
+                  font-family:var(--app-font);text-align:left;color:#1E231A;">
+        <h2 style="font-size:17px;font-weight:bold;margin:0 0 6px 0;line-height:1.2;">
+          Welcome, Game Master, to Farsight Keep
+        </h2>
+        <p style="font-size:11px;line-height:1.35;margin:0 0 6px 0;">
+          ${bodyPara1}
+        </p>
+        <p style="font-size:11px;line-height:1.35;margin:0;">
+          ${bodyPara2}
+        </p>
+      </div>
+
+      <div id="welcome-button-row" style="position:absolute;left:36%;top:92%;width:26%;height:6%;
+                  margin-top:14px;
+                  display:flex;align-items:center;justify-content:center;gap:11px;">
+        <button onclick="openSettingsFromWelcome()"
+          style="background:#1E231A;color:#e0d5c5;border:2px solid #1E231A;padding:7px 16px;
+                 cursor:pointer;border-radius:4px;font-size:15px;font-family:var(--app-font);white-space:nowrap;">
+          Open Settings
+        </button>
+        <button onclick="closeWelcomeModal()"
+          style="background:#1E231A;color:#e0d5c5;border:2px solid #1E231A;padding:7px 16px;
+                 cursor:pointer;border-radius:4px;font-size:15px;font-family:var(--app-font);white-space:nowrap;">
+          Get Started
+        </button>
+      </div>
+    </div>
+  `
+
+  document.body.appendChild(modal)
+
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) closeWelcomeModal()
+  })
+}
+window.showWelcomeModal = showWelcomeModal
+
 function openSettings() {
   const existing = document.getElementById('settings-modal')
   if (existing) {
@@ -1606,6 +1706,45 @@ function openSettings() {
           </button>
         </div>
       ` : ''}
+
+      <div style="margin-bottom:24px;">
+        <div style="font-size:14px;color:#e0d5c5;letter-spacing:.1em;font-weight:700;margin-bottom:10px;">
+          HELP
+        </div>
+        <button onclick="showWelcomeModal()"
+          style="${btnStyle}"
+          onmouseover="this.style.background='#0f3460';this.style.borderColor='#4a9a9a'"
+          onmouseout="this.style.background='#262F35';this.style.borderColor='#2a3a5a'">
+          Show Welcome Guide
+        </button>
+      </div>
+
+      <div style="border-top:1px solid #2a3a5a;padding-top:20px;">
+        <div style="font-size:14px;color:#e0d5c5;letter-spacing:.1em;font-weight:700;margin-bottom:10px;">
+          ABOUT
+        </div>
+
+        <div style="font-size:12px;color:#999;line-height:1.7;margin-bottom:16px;
+                    padding:12px 14px;background:#0d1416;border:1px solid #2a3a5a;border-radius:4px;">
+          <div style="font-weight:700;color:#e0d5c5;margin-bottom:8px;">Text Formatting (Notes, etc.)</div>
+          <div style="margin-bottom:8px;">Farsight Keep allows for different text formatting as seen below</div>
+          <ul style="margin:0;padding-left:20px;">
+            <li>*Italic*</li>
+            <li>**Bold**</li>
+            <li>***Italic and Bold***</li>
+            <li>****Underline****</li>
+            <li>Add a bullet point - Cmd/Ctrl + .</li>
+          </ul>
+        </div>
+
+        <div style="font-size:13px;font-weight:700;color:#e0d5c5;margin-bottom:8px;">Disclaimer</div>
+        <div style="font-size:12px;color:#999;line-height:1.7;">
+          Because creativity is only truly achievable by humans, all creative aspects of
+          Farsight Keep (art assets, writing, concepts) have been made by a human hand and
+          mind. HOWEVER, the code for this program was completely made using AI, and Iggy
+          and I feel it necessary to communicate this to all prospective users of Farsight Keep.
+        </div>
+      </div>
       </div>
     </div>
   `
@@ -8794,9 +8933,54 @@ document.addEventListener('keydown', (e) => {
 })
 
 // ── Boot ──────────────────────────────────────────────────────────
+const SPLASH_MIN_MS = 1500
+
+function hideSplash() {
+  const splash = document.getElementById('splash-screen')
+  if (!splash) return
+  splash.classList.add('splash-hidden')
+  setTimeout(() => {
+    splash.remove()
+    if (!loadHasSeenWelcome()) showWelcomeModal()
+  }, 550)
+}
+
+function waitForImageReady(img) {
+  return new Promise((resolve) => {
+    if (!img) return resolve()
+    if (img.complete && img.naturalWidth > 0) return resolve()
+    img.addEventListener('load', () => resolve(), { once: true })
+    img.addEventListener('error', () => resolve(), { once: true })
+  })
+}
+
 window.addEventListener('DOMContentLoaded', () => {
+  const splashStart = Date.now()
+  const splashArt = document.getElementById('splash-art')
+  const splashContent = document.getElementById('splash-content')
+
   loadFontPreference()
   render()
-  autoLoad()
-  initIgnaciousEyeTracking()
+
+  // Wait for the splash image to actually finish loading/decoding before
+  // fading anything in - otherwise the fade-in starts against a blank image
+  // and the art "pops in" whenever decoding finishes, out of sync with the text.
+  waitForImageReady(splashArt).then(() => {
+    // Wait for a real paint before the synchronous autoLoad() blocks the thread,
+    // so the fade-in isn't skipped. Opacity transitions run on the compositor,
+    // so they keep animating through the blocking work once started.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (splashContent) splashContent.classList.add('splash-visible')
+
+        autoLoad()
+        initIgnaciousEyeTracking()
+
+        const elapsed = Date.now() - splashStart
+        const remaining = Math.max(0, SPLASH_MIN_MS - elapsed)
+        setTimeout(hideSplash, remaining)
+      })
+    })
+  })
 })
+
