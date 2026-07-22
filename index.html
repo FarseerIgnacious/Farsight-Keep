@@ -69,9 +69,62 @@
       font-size: 1em !important;
       letter-spacing: 0.05em !important;
     }
+
+    #splash-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 99999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0d1416;
+      transition: opacity 0.5s ease;
+    }
+    #splash-screen.splash-hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #splash-content {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      opacity: 0;
+      transition: opacity 0.5s ease;
+    }
+    #splash-content.splash-visible {
+      opacity: 1;
+    }
+    #splash-art {
+      width: 320px;
+      max-width: 55vw;
+      height: auto;
+      aspect-ratio: 1 / 1;
+      margin-bottom: 24px;
+      object-fit: contain;
+    }
+    #splash-title {
+      font-size: 30px;
+      font-weight: bold;
+      color: #e0d5c5;
+      letter-spacing: 0.05em;
+      margin-bottom: 10px;
+    }
+    #splash-tagline {
+      font-size: 15px;
+      color: #8a7d6a;
+      font-style: italic;
+      letter-spacing: 0.05em;
+    }
   </style>
 </head>
 <body>
+  <div id="splash-screen">
+    <div id="splash-content">
+      <img id="splash-art" src="assets/Ignacious_Profile.png" alt="Ignacious">
+      <div id="splash-title">Farsight Keep</div>
+      <div id="splash-tagline">Peer into infinite stories</div>
+    </div>
+  </div>
   <div id="app"></div>
   <script src="renderer.js"></script>
   <script src="monster-builder.js"></script>
