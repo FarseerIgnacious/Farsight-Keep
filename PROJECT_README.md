@@ -25,14 +25,13 @@
 
 ### What is Farsight Keep?
 
-Farsight Keep is an **Electron-based desktop application** for running Dungeons & Dragons 5th Edition games. It serves as a comprehensive toolkit for Dungeon Masters to:
+Farsight Keep is an **Electron-based desktop application** for running Dungeons & Dragons 5/5.5e. It serves as a comprehensive toolkit for Dungeon Masters to:
 
 - Manage campaigns with multiple player characters and NPCs
 - Build and store custom monsters, NPCs, player characters, and spells
 - Run combat encounters with initiative tracking, HP management, and condition tracking
-- Import existing creatures from Game Master 5 XML format
+- Import existing creatures from Game Master 5e (not affiliated) XML format
 - Take session notes organized by campaign
-- Quick reference for D&D 5e rules and mechanics
 
 ### Target Users
 
@@ -44,30 +43,27 @@ Farsight Keep is an **Electron-based desktop application** for running Dungeons 
 
 #### Campaign Management
 - Create multiple campaigns with independent character rosters
-- Track player characters (PCs) and non-player characters (NPCs)
+- Track player characters and non-player characters
 - Organize encounters and session notes per campaign
-- Switch between campaigns seamlessly
+- Switch between multiple campaigns seamlessly
 
 #### Creature Builders
-- **Monster Builder**: Create monsters from scratch or copy existing creatures
-- **NPC Builder**: Build NPCs with proper name/title distinction
-- **PC Builder**: Full player character creator with class/level/race support
-- **Spell Builder**: Custom spell creation with component management
+- **Monster & NPC Builders**: Create monsters/NPCs from scratch or copy from pre-existing stat blocks
+- **PC Builder**: Full player character creator
+- **Spell Builder**: Custom spell creation
 
 #### Encounter System
 - Initiative tracking with automatic sorting
 - HP tracking with visual HP bars
 - Condition/status effect toggles
-- Spell slot tracking for PCs
-- Limited-use ability tracking (charges, recharges, daily uses)
-- Roll attacks and damage directly from creature cards
+- Limited-use ability tracking (spell slots, charges, recharges, daily uses)
+- Roll attacks and damage, and check spell details directly from combatant cards
 - Notes per combatant
 
 #### Data Management
-- **XML Import**: Import creatures from Game Master 5 format
+- **XML Import**: Import creatures from Game Master 5e (not affiliated) format
 - **XML Export**: Export individual creatures or entire campaigns
-- **Local Storage**: All data stored locally in Electron's userData directory
-- **No cloud sync**: Privacy-focused, fully offline
+- **Local Storage**: All data stored locally in Electron's userData directory, no cloud sync
 
 ---
 
@@ -80,13 +76,6 @@ Farsight Keep is an **Electron-based desktop application** for running Dungeons 
 - **UI**: Pure HTML/CSS (no frameworks)
 - **Storage**: LocalStorage-based JSON persistence
 - **Packaging**: electron-builder (planned)
-
-### Why Vanilla JavaScript?
-
-1. **Zero dependencies** for UI rendering = fast startup, small bundle size
-2. **Direct DOM manipulation** for precise control over complex layouts (encounter cards, builder forms)
-3. **No build step** during development = instant reload workflow
-4. **Simplicity** for a single-developer project with well-defined scope
 
 ### Dependencies
 
