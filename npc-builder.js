@@ -275,7 +275,7 @@ function npcbDraftFromNPC(npc) {
     d.portrait = npc.portrait || npc._draft?.portrait || null
 
     // Convert abbreviated size to full name (M → Medium, S → Small, etc.)
-    // Also handle numeric sizes from XML (GM5E format: 0-5)
+    // Also handle numeric sizes from XML (Game Master 5e format: 0-5)
     const sizeMap = {
       T: 'Tiny', S: 'Small', M: 'Medium', L: 'Large', H: 'Huge', G: 'Gargantuan',
       '0': 'Tiny', '1': 'Small', '2': 'Medium', '3': 'Large', '4': 'Huge', '5': 'Gargantuan'

@@ -791,7 +791,7 @@ function parseSpellNode(s) {
 
   // Handle TWO different XML formats for components:
   // FORMAT A (Fight Club 5e): <v>1</v>, <s>1</s>, <m>1</m>, <materials>text</materials>
-  // FORMAT B (GM5/other): <components>V, S, M (text)</components>
+  // FORMAT B (Game Master 5e/other): <components>V, S, M (text)</components>
 
   let verbal, somatic, material, materials, components
 
@@ -834,7 +834,7 @@ function parseSpellNode(s) {
 
   // Handle TWO different XML formats for classes:
   // FORMAT A (Fight Club 5e): <sclass>Sorcerer</sclass>, <sclass>Wizard</sclass>
-  // FORMAT B (GM5/other): <classes>Sorcerer, Wizard</classes>
+  // FORMAT B (Game Master 5e/other): <classes>Sorcerer, Wizard</classes>
 
   let classes
   const sclassTags = Array.from(s.querySelectorAll('sclass'))
@@ -916,7 +916,7 @@ function parseCampaign(xml) {
 
 
     // Parse size - can be numeric (0-5) or letter abbreviation
-    // GM5E format: 0=Tiny, 1=Small, 2=Medium, 3=Large, 4=Huge, 5=Gargantuan
+    // Game Master 5e format: 0=Tiny, 1=Small, 2=Medium, 3=Large, 4=Huge, 5=Gargantuan
     const sizeRaw = getText(node, 'size')
     const sizeMap = { '0': 'T', '1': 'S', '2': 'M', '3': 'L', '4': 'H', '5': 'G' }
     const size = sizeMap[sizeRaw] || sizeRaw
@@ -2009,7 +2009,7 @@ function exportCompendium() {
     },
     // XML export
     () => {
-    // XML export - convert to GM5E format
+    // XML export - convert to Game Master 5e format
     let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<compendium>\n'
 
     // Export monsters
@@ -2118,7 +2118,7 @@ function exportActiveCampaign() {
     },
     // XML export
     () => {
-    // XML export - convert to GM5E format
+    // XML export - convert to Game Master 5e format
     let xml = '<?xml version="1.0" encoding="UTF-8"?>\n<campaign>\n'
 
     const allCharacters = [...(data.players || []), ...(data.npcs || [])]
