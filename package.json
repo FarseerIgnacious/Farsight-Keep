@@ -1,6 +1,6 @@
 {
   "name": "farsight-keep",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "A fully offline desktop companion app for D&D 5e Dungeon Masters — manage encounters, monsters, NPCs, PCs, spells, and campaigns without needing an internet connection.",
   "main": "main.js",
   "scripts": {
