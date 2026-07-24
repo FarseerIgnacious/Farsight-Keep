@@ -14,6 +14,27 @@ function expandSize(size) {
 }
 window.expandSize = expandSize
 
+// ── Damage/Condition Tag Sorting (display-only) ────────────────────
+// Sorts a comma-joined tag string alphabetically, case-insensitively, for display.
+// Does not touch stored data - callers pass the stored string in, get a sorted copy back.
+//
+// resist/immune/vulnerable/conditionImmune hold flat tag lists for builder-authored
+// entries (e.g. "necrotic, cold") but full prose for official monster stat blocks
+// (e.g. "cold; bludgeoning, piercing, and slashing from nonmagical attacks that
+// aren't silvered", "While wearing the mask of the Dragon Queen: charmed, frightened,
+// poisoned"). Splitting prose like that on commas and sorting the fragments would
+// scramble the sentence. Bail out (return unchanged) if the string has semicolons,
+// parens, or colons, or if any comma-fragment is too long to plausibly be a lone tag.
+function sortTagString(str) {
+  if (!str || typeof str !== 'string') return str
+  if (/[;():]/.test(str)) return str
+  const parts = str.split(',').map(s => s.trim().replace(/^and\s+/i, '')).filter(Boolean)
+  if (parts.length < 2) return str
+  if (parts.some(p => p.split(/\s+/).length > 3)) return str
+  return [...parts].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })).join(', ')
+}
+window.sortTagString = sortTagString
+
 // ── Universal Circle Toggle (FIX 2 & 6) ───────────────────────────
 function circleToggle(id, isOn, onClickCode, labelText, boldLabel = false) {
   const circleColor = isOn ? '#4587A2' : 'transparent'
@@ -3683,28 +3704,28 @@ function buildCard(c, isActive) {
         <div style="margin-bottom:8px;">
           <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                       margin-bottom:4px;">RESISTANCES</div>
-          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${c.resist}</div>
+          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${sortTagString(c.resist)}</div>
         </div>
       ` : ''}
       ${c.immune ? `
         <div style="margin-bottom:8px;">
           <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                       margin-bottom:4px;">IMMUNITIES</div>
-          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${c.immune}</div>
+          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${sortTagString(c.immune)}</div>
         </div>
       ` : ''}
       ${c.vulnerable ? `
         <div style="margin-bottom:8px;">
           <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                       margin-bottom:4px;">VULNERABILITIES</div>
-          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${c.vulnerable}</div>
+          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${sortTagString(c.vulnerable)}</div>
         </div>
       ` : ''}
       ${c.conditionImmune ? `
         <div style="margin-bottom:8px;">
           <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                       margin-bottom:4px;">CONDITION IMMUNITIES</div>
-          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${c.conditionImmune}</div>
+          <div style="font-size:12px;color:#b8b0a0;line-height:1.5;">${sortTagString(c.conditionImmune)}</div>
         </div>
       ` : ''}
 
@@ -4268,6 +4289,10 @@ function addFromPC(uid) {
     savingThrows: pc.savingThrows || [],
     senses: pc.senses || '',
     languages: pc.languages || '',
+    resist: pc.resist || '',
+    immune: pc.immune || '',
+    vulnerable: pc.vulnerable || '',
+    conditionImmune: pc.conditionImmune || '',
     passive: pc.passive || '',
     passiveInsight: pc.passiveInsight ?? null,
     passiveInvestigation: pc.passiveInvestigation ?? null,
@@ -4361,6 +4386,10 @@ function addFromNPC(uid) {
     savingThrows: npc.savingThrows || [],
     senses: npc.senses || '',
     languages: npc.languages || '',
+    resist: npc.resist || '',
+    immune: npc.immune || '',
+    vulnerable: npc.vulnerable || '',
+    conditionImmune: npc.conditionImmune || '',
   })
   showToast(`${npc.label || npc.name} added — initiative: ${initRoll}`)
   refreshInitSidebar()
@@ -4531,6 +4560,10 @@ function addMonsterAsIs(name) {
     savingThrows: m.save || m.savingThrows || '',
     senses: m.senses || '',
     languages: m.languages || '',
+    resist: m.resist || '',
+    immune: m.immune || '',
+    vulnerable: m.vulnerable || '',
+    conditionImmune: m.conditionImmune || '',
   })
   showToast(`${m.name} added — initiative: ${initRoll}`)
   refreshInitSidebar()
@@ -5493,10 +5526,10 @@ function buildMonsterDetailCard(m) {
       <div style="border-top:1px solid #1A1C1E;margin-bottom:10px;"></div>
       ${sline('Skills', m.skill ? m.skill.split(',').map(s => s.trim()).sort().join(', ') : '')}
       ${sline('Saving Throws', m.save)}
-      ${sline('Damage Immunities', m.immune)}
-      ${sline('Resistances', m.resist)}
-      ${sline('Vulnerabilities', m.vulnerable)}
-      ${sline('Condition Immunities', m.conditionImmune)}
+      ${sline('Damage Immunities', sortTagString(m.immune))}
+      ${sline('Resistances', sortTagString(m.resist))}
+      ${sline('Vulnerabilities', sortTagString(m.vulnerable))}
+      ${sline('Condition Immunities', sortTagString(m.conditionImmune))}
       ${sline('Senses', m.senses)}
       ${sline('Passive Perception', m.passive)}
       ${sline('Languages', m.languages)}
@@ -5798,10 +5831,10 @@ function buildNPCDetailCard(npc) {
             }).join(', ')
           })()
         : (typeof npc.savingThrows === 'string' ? npc.savingThrows : '')))}
-      ${sline('Damage Immunities', npc.immune)}
-      ${sline('Resistances', npc.resist)}
-      ${sline('Vulnerabilities', npc.vulnerable)}
-      ${sline('Condition Immunities', npc.conditionImmune)}
+      ${sline('Damage Immunities', sortTagString(npc.immune))}
+      ${sline('Resistances', sortTagString(npc.resist))}
+      ${sline('Vulnerabilities', sortTagString(npc.vulnerable))}
+      ${sline('Condition Immunities', sortTagString(npc.conditionImmune))}
       ${sline('Senses', npc.senses)}
       ${sline('Passive Perception', npc.passive)}
       ${sline('Languages', npc.languages)}
@@ -6150,6 +6183,10 @@ function buildPCDetailCard(pc) {
           }).join(', ')
         })()
       ) : (typeof pc.savingThrows === 'string' && pc.savingThrows ? sline('Saving Throws', pc.savingThrows) : '')}
+      ${sline('Damage Immunities', sortTagString(pc.immune))}
+      ${sline('Resistances', sortTagString(pc.resist))}
+      ${sline('Vulnerabilities', sortTagString(pc.vulnerable))}
+      ${sline('Condition Immunities', sortTagString(pc.conditionImmune))}
       ${sline('Senses', pc.senses)}
       ${(() => {
         // Build passive senses line

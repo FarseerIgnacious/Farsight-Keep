@@ -1636,12 +1636,15 @@ function mbRenderTagPickerInner(field, options) {
           onmouseout="this.style.background='transparent';this.style.color='#7B9BA8'">
           ${mbEsc(o)}
         </div>`).join('')
-  const chips = selected.length === 0 ? '' : selected.map((tag, i) => `
+  // Sort a display copy only - selected (and mb.draft[field]) keeps its stored order.
+  // mbRemoveTag takes the tag value (not index) so removal is correct after sorting.
+  const sorted = [...selected].sort((a, b) => a.localeCompare(b, undefined, {sensitivity: 'base'}))
+  const chips = sorted.length === 0 ? '' : sorted.map(tag => `
     <span style="display:inline-flex;align-items:center;gap:4px;
                  background:#1A1C1E;border:1px solid #4587A2;border-radius:3px;
                  padding:2px 7px;font-size:11px;color:#e0d5c5;">
       ${mbEsc(tag)}
-      <button onclick="mbRemoveTag('${field}',${i})"
+      <button onclick="mbRemoveTag('${field}','${mbEsc(tag)}')"
         style="background:none;border:none;color:#4587A2;cursor:pointer;
                font-size:14px;line-height:1;padding:0;"
         title="Remove">&#215;</button>
@@ -1699,9 +1702,11 @@ function mbAddCustomTag(field) {
   }
 }
 
-function mbRemoveTag(field, idx) {
+function mbRemoveTag(field, value) {
   if (!mb.draft[field]) return
   window.confirmDelete('Delete?', () => {
+    const idx = mb.draft[field].indexOf(value)
+    if (idx === -1) return
     mb.draft[field].splice(idx, 1); mb.dirty = true
     const el = document.getElementById('mb-tagpicker-' + field)
     if (el) el.innerHTML = mbRenderTagPickerInner(field, MB_TAG_OPTIONS[field])

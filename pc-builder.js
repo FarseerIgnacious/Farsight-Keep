@@ -291,6 +291,14 @@ function pcbDraftFromPC(pc) {
     ? pc.slots.split(',').map(n => parseInt(n.trim()) || 0)
     : [0,0,0,0,0,0,0,0,0]
 
+  // Damage type / condition lists are saved as comma-joined strings (see pcbSave)
+  // but XML import may provide arrays. Handle both instead of discarding strings.
+  function toTagList(v) {
+    if (Array.isArray(v)) return v
+    if (typeof v === 'string' && v.trim()) return v.split(',').map(s => s.trim()).filter(Boolean)
+    return []
+  }
+
   return {
     ...d,
     name: displayName,
@@ -326,6 +334,10 @@ function pcbDraftFromPC(pc) {
     passiveInsight: pc.passiveInsight || null,
     passiveInvestigation: pc.passiveInvestigation || null,
     languages: pc.languages || '',
+    vulnerable: toTagList(pc.vulnerable),
+    resist: toTagList(pc.resist),
+    immune: toTagList(pc.immune),
+    conditionImmune: toTagList(pc.conditionImmune),
 
     // Features
     traits: Array.isArray(pc.traits) ? pc.traits.map(t => ({name: t.name, desc: t.text})) : [],
@@ -1080,6 +1092,12 @@ function pcbSave() {
     ],
     traits: normalizedTraits,
     actions: normalizedActions,
+    // Store as comma-joined strings, matching Monster/NPC builder compact format
+    // (buildCard/sline/sortTagString all expect strings, not arrays, for these fields)
+    vulnerable: (d.vulnerable||[]).join(', '),
+    resist: (d.resist||[]).join(', '),
+    immune: (d.immune||[]).join(', '),
+    conditionImmune: (d.conditionImmune||[]).join(', '),
   }
 
   if (!compendiumData.players) compendiumData.players = []

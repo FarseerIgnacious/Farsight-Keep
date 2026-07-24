@@ -33,7 +33,7 @@ function openNPCBuilder(uid = null) {
     // Set mb.draft for monster builder render functions (if mb is available)
     // Normalize NPC action format to Monster Builder format before setting
     if (typeof window.mb !== 'undefined') {
-      window.mb.draft = {...npcb.draft}
+      window.mb.draft = npcb.draft
 
       // Normalize actions using parseAttackFromText to convert NPC format to Monster format
       // NPC format: {bonus:7, dmg:"1d6+2"} → Monster format: {atk:"+7", diceCount:"1", dieType:"d6", ...}
@@ -174,6 +174,7 @@ function npcbDefaultDraft() {
     acModifier: '—',
     armor: '',
     hpValue: 10,
+    hpCurrent: null,
     hitDiceCount: 2,
     hitDiceSize: 'd8',
     speed: '30 ft.',
@@ -200,10 +201,14 @@ function npcbDefaultDraft() {
     lairActions: [],
     selectedSpells: [],
     spellSlots: [0,0,0,0,0,0,0,0,0],
+    spellSaveDC: null,
+    spellAttackMod: null,
     spellPendingName: null,
     spellPendingLevel: null,
     environments: [],
     description: '',
+    campaignName: '',
+    slotsCurrent: null,
   }
 }
 
@@ -234,6 +239,14 @@ function npcbDraftFromNPC(npc) {
       name: typeof sk.id === 'number' ? SKILL_NAMES[sk.id] : (sk.name || ''),
       modifier: sk.modifier
     }))
+  }
+
+  // Damage type / condition lists are saved as comma-joined strings (see npcbBuildEntry)
+  // but XML import and older data may provide arrays. Handle both instead of discarding strings.
+  function toDamageList(v) {
+    if (Array.isArray(v)) return v
+    if (typeof v === 'string' && v.trim()) return v.split(',').map(s => s.trim()).filter(Boolean)
+    return []
   }
 
   // If NPC has _draft (was created from builder), restore it
@@ -294,12 +307,17 @@ function npcbDraftFromNPC(npc) {
     d.tag = npc.tag || npc._draft?.tag || ''
     d.source = npc.source || npc._draft?.source || ''
 
-    // Parse AC
-    const acMatch = String(npc.ac || npc._draft?.ac || '10').match(/^(\d+)/)
+    // Parse AC (numeric value plus optional parenthetical, e.g. "16 (+Dex Mod)")
+    const acMatch = String(npc.ac || npc._draft?.ac || '10').match(/^(\d+)(?:\s*\((.+)\))?/)
     d.acValue = acMatch ? parseInt(acMatch[1]) : (npc._draft?.acValue || 10)
+    const rawAcMod = (acMatch && acMatch[2] || '').toLowerCase()
+    if (rawAcMod.includes('max 2')) d.acModifier = '+Dex Mod (max 2)'
+    else if (rawAcMod.includes('dex')) d.acModifier = '+Dex Mod'
+    else d.acModifier = npc._draft?.acModifier || '—'
     d.armor = npc.armor || npc._draft?.armor || ''
 
-    // Parse HP
+    // Parse HP. Compact/legacy format combines hp+hitDice into one string ("10 (2d8+2)");
+    // XML campaign format provides hpMax/hpCurrent/hd separately.
     const hpMatch = String(npc.hp || npc._draft?.hp || '10').match(/^(\d+)\s*\((\d+)(d\d+)/)
     if (hpMatch) {
       d.hpValue = parseInt(hpMatch[1]) || 10
@@ -307,12 +325,21 @@ function npcbDraftFromNPC(npc) {
       d.hitDiceSize = hpMatch[3] || 'd8'
     } else {
       // If no match, try to use hpMax or draft values
-      d.hpValue = npc.hpMax || npc._draft?.hpValue || npc.hp || 10
-      d.hitDiceCount = npc._draft?.hitDiceCount || 2
-      d.hitDiceSize = npc._draft?.hitDiceSize || 'd8'
+      d.hpValue = parseInt(npc.hpMax) || npc._draft?.hpValue || parseInt(npc.hp) || 10
+      const hdMatch = String(npc.hd || '').match(/^(\d+)(d\d+)/)
+      if (hdMatch) {
+        d.hitDiceCount = parseInt(hdMatch[1]) || 2
+        d.hitDiceSize = hdMatch[2] || 'd8'
+      } else {
+        d.hitDiceCount = npc._draft?.hitDiceCount || 2
+        d.hitDiceSize = npc._draft?.hitDiceSize || 'd8'
+      }
     }
+    d.hpCurrent = npc.hpCurrent != null ? parseInt(npc.hpCurrent)
+      : (npc._draft?.hpCurrent != null ? npc._draft.hpCurrent : d.hpValue)
 
     d.speed = npc.speed || npc._draft?.speed || '30 ft.'
+    d.speedEntries = window.mbParseSpeed ? window.mbParseSpeed(d.speed) : [{type:'Walk',ft:30}]
     d.initiativeBonus = npc.init || npc.initiativeBonus || npc._draft?.initiativeBonus || 0
     d.proficiencyBonus = npc.proficiencyBonus || npc._draft?.proficiencyBonus || 0
 
@@ -333,10 +360,10 @@ function npcbDraftFromNPC(npc) {
 
     d.savingThrows = convertSavingThrows(npc.savingThrows)
     d.skills = convertSkills(npc.skills)
-    d.vulnerable = Array.isArray(npc.vulnerable) ? npc.vulnerable : []
-    d.resist = Array.isArray(npc.resist) ? npc.resist : []
-    d.immune = Array.isArray(npc.immune) ? npc.immune : []
-    d.conditionImmune = Array.isArray(npc.conditionImmune) ? npc.conditionImmune : []
+    d.vulnerable = toDamageList(npc.vulnerable)
+    d.resist = toDamageList(npc.resist)
+    d.immune = toDamageList(npc.immune)
+    d.conditionImmune = toDamageList(npc.conditionImmune)
     d.senses = npc.senses || npc._draft?.senses || ''
     d.passive = npc.passive || npc._draft?.passive || ''
     d.languages = npc.languages || npc._draft?.languages || ''
@@ -367,7 +394,9 @@ function npcbDraftFromNPC(npc) {
     d.lairActions = parseEntries(npc.lairActions, false)
     d.selectedSpells = Array.isArray(npc.selectedSpells) ? npc.selectedSpells : (Array.isArray(npc._draft?.selectedSpells) ? npc._draft.selectedSpells : [])
     d.spellSlots = Array.isArray(npc.slots) ? npc.slots : (Array.isArray(npc.spellSlots) ? npc.spellSlots : (Array.isArray(npc._draft?.spellSlots) ? npc._draft.spellSlots : [0,0,0,0,0,0,0,0,0]))
-    d.description = npc.description || npc._draft?.description || ''
+    // npc.text is the free-text field from XML campaign import; only used as a fallback
+    // so it doesn't clobber a description already entered through the builder.
+    d.description = npc.description || npc._draft?.description || npc.text || ''
   }
 
   // Apply NPC-specific overrides (abilities, saving throws, skills, spells from XML)
@@ -399,7 +428,61 @@ function npcbDraftFromNPC(npc) {
         usage: spell.usage || 'slot'
       }))
     }
+
+    // The monster template is only a fallback for structural fields XML doesn't reliably
+    // provide (size/type/traits/etc). Combat stats the NPC's own record DOES provide
+    // (AC, HP, hit dice, speed, resistances) must win over the generic template values
+    // npcbDraftFromMonster just populated above — otherwise a reflavored/leveled-up
+    // NPC silently reverts to the vanilla monster's stats on first edit.
+    if (npc.ac) {
+      const acMatch = String(npc.ac).match(/^(\d+)(?:\s*\((.+)\))?/)
+      if (acMatch) {
+        d.acValue = parseInt(acMatch[1]) || d.acValue
+        const rawAcMod = (acMatch[2] || '').toLowerCase()
+        if (rawAcMod.includes('max 2')) d.acModifier = '+Dex Mod (max 2)'
+        else if (rawAcMod.includes('dex')) d.acModifier = '+Dex Mod'
+      }
+    }
+    if (npc.armor) d.armor = npc.armor
+
+    if (npc.hpMax != null || npc.hd) {
+      d.hpValue = parseInt(npc.hpMax) || d.hpValue
+      const hdMatch = String(npc.hd || '').match(/^(\d+)(d\d+)/)
+      if (hdMatch) {
+        d.hitDiceCount = parseInt(hdMatch[1]) || d.hitDiceCount
+        d.hitDiceSize = hdMatch[2] || d.hitDiceSize
+      }
+    }
+
+    if (npc.speed && typeof npc.speed === 'string') {
+      d.speed = npc.speed
+      d.speedEntries = window.mbParseSpeed ? window.mbParseSpeed(npc.speed) : d.speedEntries
+    }
+
+    if (npc.resist != null) d.resist = toDamageList(npc.resist)
+    if (npc.vulnerable != null) d.vulnerable = toDamageList(npc.vulnerable)
+    if (npc.immune != null) d.immune = toDamageList(npc.immune)
+    if (npc.conditionImmune != null) d.conditionImmune = toDamageList(npc.conditionImmune)
+
+    if (npc.senses) d.senses = npc.senses
+    if (npc.passive) d.passive = npc.passive
+    if (npc.languages) d.languages = npc.languages
+    if (npc.cr) d.cr = String(npc.cr)
+
+    // Preserve current HP for monster-templated NPCs too (not just the compact-format branch above)
+    d.hpCurrent = npc.hpCurrent != null ? parseInt(npc.hpCurrent)
+      : (npc._draft?.hpCurrent != null ? npc._draft.hpCurrent : d.hpValue)
   }
+
+  // Fields that apply regardless of which branch populated the draft above
+  if (npc.spellSaveDC != null) d.spellSaveDC = npc.spellSaveDC
+  else if (npc._draft?.spellSaveDC != null) d.spellSaveDC = npc._draft.spellSaveDC
+  if (npc.spellAttackMod != null) d.spellAttackMod = npc.spellAttackMod
+  else if (npc._draft?.spellAttackMod != null) d.spellAttackMod = npc._draft.spellAttackMod
+  if (npc.campaignName) d.campaignName = npc.campaignName
+  if (npc.slotsCurrent != null) d.slotsCurrent = npc.slotsCurrent
+  // Fallback for the baseMonster branch, which doesn't read npc.text itself
+  if (!d.description && npc.text) d.description = npc.text
 
   // Ensure ALL array fields are arrays after any assignment
   // Don't overwrite savingThrows/skills if they're already set correctly from baseMonster path
@@ -896,9 +979,30 @@ function npcbBuildEntry(d) {
     }
   }
   function actionToBlob(e) {
+    // e.attack is normalized to the Monster Builder structured attack shape by
+    // normalizeActions() in openNPCBuilder (atk/diceCount/dieType/dmgBonus/dmgType/...),
+    // not the legacy {bonus, dmg} NPC shape. Serialize the same way Monster Builder's
+    // own actionToBlob does (monster-builder.js mbBuildCompendiumEntry) so attack data
+    // survives the round trip and the encounter tracker's rollDamage() (which prefers
+    // this structured format) keeps working.
+    const attackObj = e.attack ? {
+      atk: e.attack.atk || '+0',
+      diceCount: e.attack.diceCount || '',
+      dieType: e.attack.dieType || 'd6',
+      dmgBonus: e.attack.dmgBonus || '',
+      dmgType: e.attack.dmgType || '',
+      additionalDiceCount: e.attack.additionalDiceCount || '',
+      additionalDieType: e.attack.additionalDieType || '',
+      additionalDmgType: e.attack.additionalDmgType || '',
+      altDiceCount: e.attack.altDiceCount || '',
+      altDieType: e.attack.altDieType || '',
+      altDmgBonus: e.attack.altDmgBonus || '',
+      altDmgType: e.attack.altDmgType || '',
+    } : null
+    if (attackObj && e.attack.dmg) attackObj.dmg = e.attack.dmg
     return {
       ...entryToBlob(e),
-      attack: e.attack ? { name:e.name, atk:window.mbSignedNum(e.attack.bonus), dmg:e.attack.dmg } : null,
+      attack: attackObj,
     }
   }
 
@@ -920,7 +1024,8 @@ function npcbBuildEntry(d) {
     armor: d.armor||'',
     hp: `${d.hpValue} (${d.hitDiceCount}${d.hitDiceSize}${conStr})`,
     hpMax: d.hpValue,
-    hpCurrent: d.hpValue,
+    hpCurrent: d.hpCurrent != null ? d.hpCurrent : d.hpValue,
+    hd: `${d.hitDiceCount}${d.hitDiceSize}${conStr}`,
     speed: window.mbSpeedStr ? window.mbSpeedStr(d.speedEntries || [{type:'Walk',ft:30}]) : (d.speed || '30 ft.'),
     initiativeBonus: d.initiativeBonus,
     proficiencyBonus: d.proficiencyBonus||0,
@@ -951,6 +1056,8 @@ function npcbBuildEntry(d) {
     spells: (d.selectedSpells||[]).filter(s=>s&&s.usage==='slot').map(s=>s.name),
     spellSaveDC: d.spellSaveDC,
     spellAttackMod: d.spellAttackMod,
+    campaignName: d.campaignName || undefined,
+    slotsCurrent: d.slotsCurrent != null ? d.slotsCurrent : undefined,
   }
 }
 
