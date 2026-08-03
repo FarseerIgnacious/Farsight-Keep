@@ -313,8 +313,20 @@ const ABILITY_NAMES = {
 const CONDITIONS = [
   'Blinded','Charmed','Deafened','Exhaustion','Frightened','Grappled',
   'Incapacitated','Invisible','Paralyzed','Petrified','Poisoned',
-  'Prone','Restrained','Stunned','Unconscious'
+  'Prone','Raging','Restrained','Stunned','Unconscious'
 ]
+
+// Alphabetical, except "Raging" always sorts to the front - shared by both the active
+// condition chips on a combatant and the "+ Condition" add-dropdown, so the two stay consistent.
+function sortConditionsRagingFirst(conditions) {
+  const sorted = [...conditions].sort((a, b) => a.localeCompare(b, undefined, {sensitivity: 'base'}))
+  const ragingIdx = sorted.indexOf('Raging')
+  if (ragingIdx > -1) {
+    sorted.splice(ragingIdx, 1)
+    sorted.unshift('Raging')
+  }
+  return sorted
+}
 
 // ── Navigation History ────────────────────────────────────────────
 let navHistory = []
@@ -2530,8 +2542,8 @@ function showSection(section, skipHistory = false) {
   if (section === 'monsters') {
     monsterFilters = {
       query: '',
-      cr: '',
-      type: '',
+      cr: [],
+      type: [],
       homebrew: '',
       thirdParty: '',
       environment: [],
@@ -2543,8 +2555,8 @@ function showSection(section, skipHistory = false) {
   } else if (section === 'spells') {
     spellFilters = {
       query: '',
-      level: '',
-      school: '',
+      level: [],
+      school: [],
       ritual: '',
       concentration: '',
       homebrew: '',
@@ -2901,6 +2913,7 @@ function runEncounter(id) {
         // Restore truly dynamic combat state
         c.hpCurrent = savedState.hpCurrent
         c.tempHp = savedState.tempHp || 0
+        c.tempHpMax = savedState.tempHpMax || 0
         // NOTE: Do NOT restore hpMax, ac, abilities - those are static character stats
         // that should come from the base combatant data (which migration updates)
         c.initiative = savedState.initiative
@@ -2926,6 +2939,7 @@ function runEncounter(id) {
     enc.current.combatants.forEach(c => {
       c.hpCurrent = c.hpMax
       c.tempHp = 0
+      c.tempHpMax = 0
       // Backwards compatibility: default isEnemy for old saves
       if (c.isEnemy === undefined) {
         c.isEnemy = !c.isPC
@@ -3106,7 +3120,7 @@ function refreshInitSidebar() {
   }
   sidebar.innerHTML = roundHeader + combatants.map((c, i) => {
     const pct = c.hpMax > 0 ? Math.max(0, Math.min(100, (c.hpCurrent / c.hpMax) * 100)) : 100
-    const tempPct = c.hpMax > 0 ? Math.max(0, Math.min(100, ((c.tempHp||0) / c.hpMax) * 100)) : 0
+    const tempPct = c.tempHpMax > 0 ? Math.max(0, Math.min(100, ((c.tempHp||0) / c.tempHpMax) * 100)) : 0
     const barColor = pct > 50 ? '#2a7a2a' : pct > 25 ? '#7a6a00' : '#8a0000'
     const isActive = enc.inCombat && i === enc.turn
     return `
@@ -3125,7 +3139,7 @@ function refreshInitSidebar() {
             <div style="font-size:11px;color:#C8C8C8;flex-shrink:0;margin-left:4px;">${c.initiative}</div>
           </div>
           <div style="font-size:11px;color:#C8C8C8;margin-bottom:3px;">
-            AC ${(() => { const n = parseInt(c.ac); return !isNaN(n) ? n : (c.ac || '—') })()} · ${c.tempHp > 0 ? `<span style="color:#e0c840;margin-right:4px;">${c.tempHp}</span>` : ''}${c.hpCurrent}/${c.hpMax} HP
+            AC ${(() => { const n = parseInt(c.ac); return !isNaN(n) ? n : (c.ac || '—') })()} · ${c.tempHp > 0 ? `<span style="color:#e0c840;margin-right:8px;">${c.tempHp}</span>` : ''}${c.hpCurrent}/${c.hpMax} HP
             ${c.hpCurrent <= 0 ? '<span style="font-weight:bold;color:#ff0000;margin-left:6px;">DEAD</span>' : ''}
           </div>
           <div style="height:4px;background:#1e2d4a;border-radius:2px;position:relative;">
@@ -3231,7 +3245,7 @@ function hpBarColor(pct) {
 
 function buildCard(c, isActive) {
   const pct = c.hpMax > 0 ? Math.max(0, Math.min(100, (c.hpCurrent / c.hpMax) * 100)) : 100
-  const tempPct = c.hpMax > 0 ? Math.max(0, Math.min(100, ((c.tempHp||0) / c.hpMax) * 100)) : 0
+  const tempPct = c.tempHpMax > 0 ? Math.max(0, Math.min(100, ((c.tempHp||0) / c.tempHpMax) * 100)) : 0
 
   // Helper to calculate ability modifier
   function abilityMod(score) {
@@ -3275,15 +3289,19 @@ function buildCard(c, isActive) {
     return 10
   }
 
-  const availConds = CONDITIONS.filter(cond => !c.conditions.includes(cond))
-  const activeChips = c.conditions.map(cond => `
+  const availConds = sortConditionsRagingFirst(CONDITIONS.filter(cond => !c.conditions.includes(cond)))
+  const sortedConditions = sortConditionsRagingFirst(c.conditions)
+  const activeChips = sortedConditions.map(cond => {
+    const isRaging = cond === 'Raging'
+    return `
     <span style="display:inline-flex;align-items:center;gap:3px;padding:2px 8px 2px 10px;
-                 border-radius:10px;font-size:12px;background:#4a9a9a;color:#e0d5c5;margin:2px;">
+                 border-radius:10px;font-size:12px;background:${isRaging ? '#8b2020' : '#4a9a9a'};color:#e0d5c5;margin:2px;">
       ${cond}
       <button onclick="removeCondition('${c.uid}','${cond}')"
         style="background:none;border:none;color:#e0d5c5;cursor:pointer;font-size:14px;
                line-height:1;padding:0;margin-left:2px;opacity:.7;" title="Remove">×</button>
-    </span>`).join('')
+    </span>`
+  }).join('')
   const condDropItems = availConds.map(cond => `
     <div onclick="addCondFromDrop('${c.uid}','${cond}')"
       style="padding:6px 12px;cursor:pointer;font-size:12px;color:#aaa;white-space:nowrap;"
@@ -3702,7 +3720,7 @@ function buildCard(c, isActive) {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
           <span style="font-size:13px;color:#C8C8C8;">HP</span>
           <div style="display:flex;align-items:center;gap:8px;">
-            <span style="font-size:15px;font-weight:bold;">${c.tempHp > 0 ? `<span style="color:#e0c840;margin-right:4px;">${c.tempHp}</span>` : ''}${c.hpCurrent} / ${c.hpMax}</span>
+            <span style="font-size:15px;font-weight:bold;">${c.tempHp > 0 ? `<span style="color:#e0c840;margin-right:8px;">${c.tempHp}</span>` : ''}${c.hpCurrent} / ${c.hpMax}</span>
             ${c.hpCurrent <= 0 ? '<span style="font-size:13px;font-weight:bold;color:#ff0000;">DEAD</span>' : ''}
           </div>
         </div>
@@ -4347,6 +4365,7 @@ function addFromPC(uid) {
     hpMax: hpMax,
     hpCurrent: hpCurrent,
     tempHp: 0,
+    tempHpMax: 0,
     str: parseInt(abilities[0]) || 10,
     dex: parseInt(abilities[1]) || 10,
     con: parseInt(abilities[2]) || 10,
@@ -4469,6 +4488,7 @@ function addFromNPC(uid) {
     hpMax: parseInt(npc.hpMax) || 1,
     hpCurrent: parseInt(npc.hpCurrent) || parseInt(npc.hpMax) || 1,
     tempHp: 0,
+    tempHpMax: 0,
     str: parseInt(abilities[0]) || parseInt(npc.str) || 10,
     dex: parseInt(abilities[1]) || parseInt(npc.dex) || 10,
     con: parseInt(abilities[2]) || parseInt(npc.con) || 10,
@@ -4625,6 +4645,7 @@ function addMonsterAsIs(name) {
     hpMax: hpNum,
     hpCurrent: hpNum,
     tempHp: 0,
+    tempHpMax: 0,
     str: parseInt(m.str) || 10,
     dex: parseInt(m.dex) || 10,
     con: parseInt(m.con) || 10,
@@ -4717,7 +4738,7 @@ function addCustomCombatant() {
   enc.current.combatants.push({
     uid: makeCombatantUid(),
     name, type: 'Custom', initiative: initRoll,
-    ac, speed: '', hpMax: hp, hpCurrent: hp, tempHp: 0,
+    ac, speed: '', hpMax: hp, hpCurrent: hp, tempHp: 0, tempHpMax: 0,
     conditions: [], traits: [], actions: [], spellSlots: null, dailySpells: null,
   })
   if (nameEl) nameEl.value = ''
@@ -4765,6 +4786,7 @@ function applyDamage(uid) {
   const fromTemp = Math.min(c.tempHp||0, remaining)
   c.tempHp = (c.tempHp||0) - fromTemp
   remaining -= fromTemp
+  if (c.tempHp === 0) c.tempHpMax = 0
   c.hpCurrent = Math.max(0, c.hpCurrent - remaining)
   if (input) input.value = ''
   refreshInitSidebar()
@@ -4777,7 +4799,10 @@ function applyTempHp(uid) {
   if (isNaN(amount) || amount <= 0) return
   const c = enc.current?.combatants.find(x => x.uid === uid)
   if (!c) return
-  c.tempHp = Math.max(c.tempHp||0, amount)
+  if (amount > (c.tempHp||0)) {
+    c.tempHp = amount
+    c.tempHpMax = amount
+  }
   if (input) input.value = ''
   refreshInitSidebar()
   refreshCards()
@@ -5027,6 +5052,7 @@ function saveEncounterPrompt() {
         hpCurrent: c.hpCurrent,
         hpMax: c.hpMax,
         tempHp: c.tempHp || 0,
+        tempHpMax: c.tempHpMax || 0,
         initiative: c.initiative,
         conditions: [...c.conditions],
         isEnemy: c.isEnemy,
@@ -5290,8 +5316,8 @@ function cancelRenameCampaign() {
 // Monster filter state
 let monsterFilters = {
   query: '',
-  cr: '',
-  type: '',
+  cr: [],
+  type: [],
   homebrew: '',
   thirdParty: '',
   environment: [],
@@ -5305,9 +5331,53 @@ let monsterFilters = {
 // a single entity, so filtering needs its own thin variant targeting monsterFilters/spellFilters.
 let filterTagPickerOpen = null
 let filterTagPickerQuery = ''
+// One consistent size for every filter dropdown (Monsters: CR/Type/Environment/Source,
+// Spells: Level/School/Source) rather than sizing each to its own longest entry - the
+// panel width comfortably fits most real Source/Environment names on one line; anything
+// longer wraps to a second line instead of truncating or forcing the control wider.
+const FILTER_TRIGGER_WIDTH = 160
+const FILTER_PANEL_WIDTH = 260
+
+const MONSTER_CR_OPTIONS = ['0','1/8','1/4','1/2','1','2','3','4','5','6','7','8','9','10',
+  '11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30']
+
+function monsterUniqueTypes() {
+  return [...new Set(compendiumData.monsters
+    .map(m => m.type || '')
+    .filter(t => {
+      if (!t || t.length <= 1) return false
+      if (t === '$' || /^[A-Z]{1,3}$/.test(t)) return false
+      return true
+    })
+    .map(t => {
+      const lowercase = ['of', 'the', 'a', 'an', 'in', 'from', 'with', 'and', 'or', 'but', 'for', 'to', 'at', 'by', 'on']
+      return t.split(' ').map((word, index) => {
+        if (!word) return word
+        const lower = word.toLowerCase()
+        if (index === 0) return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        if (lowercase.includes(lower)) return lower
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      }).join(' ')
+    })
+  )].sort()
+}
 
 function filterTagKindConfig(kind) {
   switch (kind) {
+    case 'monster-cr':
+      return {
+        label: 'CR',
+        getSelected: () => monsterFilters.cr,
+        getOptions: () => MONSTER_CR_OPTIONS,
+        apply: applyMonsterFilters,
+      }
+    case 'monster-type':
+      return {
+        label: 'Type',
+        getSelected: () => monsterFilters.type,
+        getOptions: monsterUniqueTypes,
+        apply: applyMonsterFilters,
+      }
     case 'monster-environment':
       return {
         label: 'Environment',
@@ -5337,11 +5407,43 @@ function filterTagKindConfig(kind) {
         },
         apply: applySpellFilters,
       }
+    case 'spell-level':
+      return {
+        label: 'Level',
+        getSelected: () => spellFilters.level,
+        getOptions: () => ['Cantrip', 'Level 1', 'Level 2', 'Level 3', 'Level 4', 'Level 5', 'Level 6', 'Level 7', 'Level 8', 'Level 9'],
+        apply: applySpellFilters,
+      }
+    case 'spell-school':
+      return {
+        label: 'School',
+        getSelected: () => spellFilters.school,
+        getOptions: spellUniqueSchools,
+        apply: applySpellFilters,
+      }
   }
 }
 
+function spellUniqueSchools() {
+  const lowercase = ['of', 'the', 'a', 'an', 'in', 'from', 'with', 'and', 'or', 'but', 'for', 'to', 'at', 'by', 'on']
+  const schools = [...new Set(compendiumData.spells
+    .map(s => s.school || '')
+    .filter(school => school && school.trim())
+    .map(school => school.split(' ').map((word, index) => {
+      if (!word) return word
+      const lower = word.toLowerCase()
+      if (index === 0) return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+      if (lowercase.includes(lower)) return lower
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+    }).join(' '))
+  )].sort()
+  const noneIndex = schools.indexOf('None')
+  if (noneIndex !== -1) { schools.splice(noneIndex, 1); schools.push('None') }
+  return schools
+}
+
 function refreshAllFilterTagPickers() {
-  ['monster-environment', 'monster-source', 'spell-source'].forEach(kind => {
+  ['monster-cr', 'monster-type', 'monster-environment', 'monster-source', 'spell-level', 'spell-school', 'spell-source'].forEach(kind => {
     const el = document.getElementById('filter-tagpicker-' + kind)
     if (el) el.innerHTML = renderFilterTagPickerInner(kind)
   })
@@ -5366,7 +5468,19 @@ function toggleFilterTagValue(kind, value) {
   const idx = arr.indexOf(value)
   if (idx === -1) arr.push(value); else arr.splice(idx, 1)
   cfg.apply()
-  refreshAllFilterTagPickers()
+
+  // Only the toggled kind's own trigger/panel need refreshing - selecting a value in one
+  // filter never changes another filter's label. Re-rendering just this one (rather than
+  // all seven via refreshAllFilterTagPickers) also lets us preserve the option list's
+  // scroll position across the update, since the scrollable div gets destroyed and
+  // recreated by the innerHTML replacement either way.
+  const picker = document.getElementById('filter-tagpicker-' + kind)
+  const optsEl = document.getElementById('filter-tagopts-' + kind)
+  const scrollTop = optsEl ? optsEl.scrollTop : 0
+  if (picker) picker.innerHTML = renderFilterTagPickerInner(kind)
+  const newOptsEl = document.getElementById('filter-tagopts-' + kind)
+  if (newOptsEl) newOptsEl.scrollTop = scrollTop
+
   refreshActiveFilterChips()
 }
 
@@ -5382,14 +5496,14 @@ function renderFilterTagOptionsList(kind) {
     const isOn = selected.includes(o)
     return `
     <div onclick="toggleFilterTagValue('${kind}','${o.replace(/'/g, "\\'")}')"
-      style="display:flex;align-items:center;gap:6px;padding:5px 6px;cursor:pointer;
+      style="display:flex;align-items:flex-start;gap:6px;padding:5px 6px;cursor:pointer;
              border-radius:3px;font-size:12px;color:${isOn ? '#e0d5c5' : '#7B9BA8'};
              background:${isOn ? '#2a3a42' : 'transparent'};"
       onmouseover="this.style.background='#243139'"
       onmouseout="this.style.background='${isOn ? '#2a3a42' : 'transparent'}'">
-      <div style="width:13px;height:13px;border:2px solid ${isOn ? '#4587A2' : '#666'};
+      <div style="width:13px;height:13px;margin-top:2px;border:2px solid ${isOn ? '#4587A2' : '#666'};
                   border-radius:3px;background:${isOn ? '#4587A2' : 'transparent'};flex-shrink:0;"></div>
-      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${o}</span>
+      <span style="white-space:normal;word-break:break-word;line-height:1.4;">${o}</span>
     </div>`
   }).join('')
 }
@@ -5401,12 +5515,12 @@ function renderFilterTagPickerInner(kind) {
   const triggerLabel = selected.length > 0 ? `${cfg.label} (${selected.length})` : `All ${cfg.label}s`
   const filterStyle = `background:#1A1C1E;border:1px solid #2E2F2D;color:#e0d5c5;
     font-family:var(--app-font);padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;
-    max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`
+    max-width:${FILTER_TRIGGER_WIDTH}px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`
 
   const panelHtml = !isOpen ? '' : `
     <div style="position:absolute;top:100%;left:0;margin-top:4px;z-index:20;
                 background:#1A1C1E;border:1px solid #2E2F2D;border-radius:4px;
-                width:220px;padding:8px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+                width:${FILTER_PANEL_WIDTH}px;padding:8px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
       <input placeholder="Filter…" value="${mbEsc(filterTagPickerQuery)}"
         oninput="filterTagPickerQuery=this.value;document.getElementById('filter-tagopts-${kind}').innerHTML=renderFilterTagOptionsList('${kind}')"
         style="width:100%;box-sizing:border-box;padding:5px 8px;font-size:12px;margin-bottom:6px;
@@ -5427,7 +5541,7 @@ function renderFilterTagPickerInner(kind) {
 }
 
 function renderActiveFilterChipsHtml(tab) {
-  const kinds = tab === 'monster' ? ['monster-environment', 'monster-source'] : ['spell-source']
+  const kinds = tab === 'monster' ? ['monster-cr', 'monster-type', 'monster-environment', 'monster-source'] : ['spell-level', 'spell-school', 'spell-source']
   const chips = []
   kinds.forEach(kind => {
     filterTagKindConfig(kind).getSelected().forEach(val => chips.push({ kind, val }))
@@ -5447,34 +5561,7 @@ function renderActiveFilterChipsHtml(tab) {
 }
 
 function renderMonsters(container) {
-  // Get unique types from actual data, normalized and deduplicated
-  const uniqueTypes = [...new Set(compendiumData.monsters
-    .map(m => m.type || '')
-    .filter(t => {
-      // Filter out garbage: empty strings, single chars, special codes like "$"
-      if (!t || t.length <= 1) return false
-      if (t === '$' || /^[A-Z]{1,3}$/.test(t)) return false
-      return true
-    })
-    .map(t => {
-      // Normalize to title case for deduplication (with proper article/preposition handling)
-      const lowercase = ['of', 'the', 'a', 'an', 'in', 'from', 'with', 'and', 'or', 'but', 'for', 'to', 'at', 'by', 'on']
-      return t.split(' ').map((word, index) => {
-        if (!word) return word
-        const lower = word.toLowerCase()
-        // First word is always capitalized
-        if (index === 0) return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-        // Keep articles/prepositions lowercase
-        if (lowercase.includes(lower)) return lower
-        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-      }).join(' ')
-    })
-  )].sort()
-
-  const filterStyle = `background:#1A1C1E;border:1px solid #2E2F2D;color:#e0d5c5;
-    font-family:var(--app-font);padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;`
-
-  const hasActiveFilters = monsterFilters.query || monsterFilters.cr || monsterFilters.type ||
+  const hasActiveFilters = monsterFilters.query || monsterFilters.cr.length > 0 || monsterFilters.type.length > 0 ||
     monsterFilters.homebrew || monsterFilters.thirdParty || monsterFilters.environment.length > 0 ||
     monsterFilters.spellcaster || monsterFilters.source.length > 0
 
@@ -5495,31 +5582,25 @@ function renderMonsters(container) {
       </button>
     </div>
 
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
-      <select onchange="monsterFilters.cr=this.value;applyMonsterFilters()" style="${filterStyle}">
-        <option value="">All CRs</option>
-        ${['0','1/8','1/4','1/2','1','2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17','18','19','20','21','22','23','24','25','26','27','28','29','30']
-          .map(cr => `<option value="${cr}" ${monsterFilters.cr === cr ? 'selected' : ''}>${cr}</option>`).join('')}
-      </select>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <div id="filter-tagpicker-monster-cr">${renderFilterTagPickerInner('monster-cr')}</div>
+        <div id="filter-tagpicker-monster-type">${renderFilterTagPickerInner('monster-type')}</div>
+        <div id="filter-tagpicker-monster-environment">${renderFilterTagPickerInner('monster-environment')}</div>
+        <div id="filter-tagpicker-monster-source">${renderFilterTagPickerInner('monster-source')}</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        ${threeStateToggle('homebrew', 'Homebrew')}
+        ${threeStateToggle('thirdParty', 'Third Party')}
+        ${threeStateToggle('spellcaster', 'Spellcaster')}
 
-      <select onchange="monsterFilters.type=this.value;applyMonsterFilters()" style="${filterStyle}">
-        <option value="">All Types</option>
-        ${uniqueTypes.map(type => `<option value="${type}" ${monsterFilters.type === type ? 'selected' : ''}>${type}</option>`).join('')}
-      </select>
-
-      <div id="filter-tagpicker-monster-environment">${renderFilterTagPickerInner('monster-environment')}</div>
-      <div id="filter-tagpicker-monster-source">${renderFilterTagPickerInner('monster-source')}</div>
-
-      ${threeStateToggle('homebrew', 'Homebrew')}
-      ${threeStateToggle('thirdParty', 'Third Party')}
-      ${threeStateToggle('spellcaster', 'Spellcaster')}
-
-      <button id="clear-monster-filters" onclick="clearMonsterFilters()"
-        style="background:#5C5C5C;color:#1E231A;border:4px solid #2E2F2D;padding:7px 14px;
-               border-radius:4px;font-family:var(--app-font);font-size:13px;font-weight:bold;
-               ${hasActiveFilters ? 'cursor:pointer;opacity:1;' : 'cursor:not-allowed;opacity:0.4;pointer-events:none;'}">
-        Clear Filters
-      </button>
+        <button id="clear-monster-filters" onclick="clearMonsterFilters()"
+          style="background:#5C5C5C;color:#1E231A;border:4px solid #2E2F2D;padding:7px 14px;
+                 border-radius:4px;font-family:var(--app-font);font-size:13px;font-weight:bold;
+                 ${hasActiveFilters ? 'cursor:pointer;opacity:1;' : 'cursor:not-allowed;opacity:0.4;pointer-events:none;'}">
+          Clear Filters
+        </button>
+      </div>
     </div>
 
     <div id="monster-filter-chips">${renderActiveFilterChipsHtml('monster')}</div>
@@ -5540,16 +5621,16 @@ function applyMonsterFilters() {
     filtered = filtered.filter(m => m.name.toLowerCase().includes(q))
   }
 
-  // CR filter
-  if (monsterFilters.cr) {
-    filtered = filtered.filter(m => m.cr === monsterFilters.cr)
+  // CR filter (OR across selected tags)
+  if (monsterFilters.cr.length > 0) {
+    filtered = filtered.filter(m => monsterFilters.cr.includes(m.cr))
   }
 
-  // Type filter (partial match for subtypes)
-  if (monsterFilters.type) {
+  // Type filter (OR across selected tags, partial match for subtypes)
+  if (monsterFilters.type.length > 0) {
     filtered = filtered.filter(m => {
       const type = (m.type || '').toLowerCase()
-      return type.includes(monsterFilters.type.toLowerCase())
+      return monsterFilters.type.some(sel => type.includes(sel.toLowerCase()))
     })
   }
 
@@ -5624,8 +5705,8 @@ function applyMonsterFilters() {
   // Update Clear Filters button state dynamically
   const clearBtn = document.getElementById('clear-monster-filters')
   if (clearBtn) {
-    const hasActive = monsterFilters.query || monsterFilters.cr ||
-      monsterFilters.type || monsterFilters.homebrew ||
+    const hasActive = monsterFilters.query || monsterFilters.cr.length > 0 ||
+      monsterFilters.type.length > 0 || monsterFilters.homebrew ||
       monsterFilters.thirdParty || monsterFilters.environment.length > 0 ||
       monsterFilters.spellcaster || monsterFilters.source.length > 0
     clearBtn.style.opacity = hasActive ? '1' : '0.4'
@@ -5637,8 +5718,8 @@ function applyMonsterFilters() {
 function clearMonsterFilters() {
   monsterFilters = {
     query: '',
-    cr: '',
-    type: '',
+    cr: [],
+    type: [],
     homebrew: '',
     thirdParty: '',
     environment: [],
@@ -6707,8 +6788,8 @@ function renderAbilitySection(title, items) {
 // Spell filter state
 let spellFilters = {
   query: '',
-  level: '',
-  school: '',
+  level: [],
+  school: [],
   ritual: '',
   concentration: '',
   homebrew: '',
@@ -6717,40 +6798,7 @@ let spellFilters = {
 }
 
 function renderSpells(container) {
-  // Get unique schools from actual data, normalized and deduplicated
-  let uniqueSchools = [...new Set(compendiumData.spells
-    .map(s => s.school || '')
-    .filter(school => {
-      // Filter out empty/null/undefined values
-      if (!school || !school.trim()) return false
-      return true
-    })
-    .map(school => {
-      // Normalize to title case for deduplication (with proper article/preposition handling)
-      const lowercase = ['of', 'the', 'a', 'an', 'in', 'from', 'with', 'and', 'or', 'but', 'for', 'to', 'at', 'by', 'on']
-      return school.split(' ').map((word, index) => {
-        if (!word) return word
-        const lower = word.toLowerCase()
-        // First word is always capitalized
-        if (index === 0) return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-        // Keep articles/prepositions lowercase
-        if (lowercase.includes(lower)) return lower
-        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
-      }).join(' ')
-    })
-  )].sort()
-
-  // Move "None" to the end if it exists
-  const noneIndex = uniqueSchools.indexOf('None')
-  if (noneIndex !== -1) {
-    uniqueSchools.splice(noneIndex, 1)
-    uniqueSchools.push('None')
-  }
-
-  const filterStyle = `background:#1A1C1E;border:1px solid #2E2F2D;color:#e0d5c5;
-    font-family:var(--app-font);padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;`
-
-  const hasActiveFilters = spellFilters.query || spellFilters.level || spellFilters.school ||
+  const hasActiveFilters = spellFilters.query || spellFilters.level.length > 0 || spellFilters.school.length > 0 ||
     spellFilters.ritual || spellFilters.concentration || spellFilters.homebrew || spellFilters.thirdParty ||
     spellFilters.source.length > 0
 
@@ -6771,33 +6819,25 @@ function renderSpells(container) {
       </button>
     </div>
 
-    <div style="display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap;">
-      <select onchange="spellFilters.level=this.value;applySpellFilters()" style="${filterStyle}">
-        <option value="">All Levels</option>
-        <option value="0" ${spellFilters.level === '0' ? 'selected' : ''}>Cantrip</option>
-        ${[1,2,3,4,5,6,7,8,9].map(lvl =>
-          `<option value="${lvl}" ${spellFilters.level === String(lvl) ? 'selected' : ''}>Level ${lvl}</option>`
-        ).join('')}
-      </select>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px;">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <div id="filter-tagpicker-spell-level">${renderFilterTagPickerInner('spell-level')}</div>
+        <div id="filter-tagpicker-spell-school">${renderFilterTagPickerInner('spell-school')}</div>
+        <div id="filter-tagpicker-spell-source">${renderFilterTagPickerInner('spell-source')}</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        ${threeStateToggle('ritual', 'Ritual', 'spell')}
+        ${threeStateToggle('concentration', 'Concentration', 'spell')}
+        ${threeStateToggle('homebrew', 'Homebrew', 'spell')}
+        ${threeStateToggle('thirdParty', 'Third Party', 'spell')}
 
-      <select onchange="spellFilters.school=this.value;applySpellFilters()" style="${filterStyle}">
-        <option value="">All Schools</option>
-        ${uniqueSchools.map(school => `<option value="${school}" ${spellFilters.school === school ? 'selected' : ''}>${school}</option>`).join('')}
-      </select>
-
-      <div id="filter-tagpicker-spell-source">${renderFilterTagPickerInner('spell-source')}</div>
-
-      ${threeStateToggle('ritual', 'Ritual', 'spell')}
-      ${threeStateToggle('concentration', 'Concentration', 'spell')}
-      ${threeStateToggle('homebrew', 'Homebrew', 'spell')}
-      ${threeStateToggle('thirdParty', 'Third Party', 'spell')}
-
-      <button id="clear-spell-filters" onclick="clearSpellFilters()"
-        style="background:#5C5C5C;color:#1E231A;border:4px solid #2E2F2D;padding:7px 14px;
-               border-radius:4px;font-family:var(--app-font);font-size:13px;font-weight:bold;
-               ${hasActiveFilters ? 'cursor:pointer;opacity:1;' : 'cursor:not-allowed;opacity:0.4;pointer-events:none;'}">
-        Clear Filters
-      </button>
+        <button id="clear-spell-filters" onclick="clearSpellFilters()"
+          style="background:#5C5C5C;color:#1E231A;border:4px solid #2E2F2D;padding:7px 14px;
+                 border-radius:4px;font-family:var(--app-font);font-size:13px;font-weight:bold;
+                 ${hasActiveFilters ? 'cursor:pointer;opacity:1;' : 'cursor:not-allowed;opacity:0.4;pointer-events:none;'}">
+          Clear Filters
+        </button>
+      </div>
     </div>
 
     <div id="spell-filter-chips">${renderActiveFilterChipsHtml('spell')}</div>
@@ -6819,22 +6859,22 @@ function applySpellFilters() {
     )
   }
 
-  // Level filter
-  if (spellFilters.level !== '') {
+  // Level filter (OR across selected tags)
+  if (spellFilters.level.length > 0) {
     filtered = filtered.filter(s => {
       const isCantrip = s.level === '0' || s.level === '' || !s.level
-      if (spellFilters.level === '0') {
-        return isCantrip
-      }
-      return s.level === spellFilters.level
+      return spellFilters.level.some(sel => {
+        if (sel === 'Cantrip') return isCantrip
+        return s.level === sel.replace('Level ', '')
+      })
     })
   }
 
-  // School filter (case-insensitive comparison)
-  if (spellFilters.school) {
+  // School filter (OR across selected tags, case-insensitive comparison)
+  if (spellFilters.school.length > 0) {
     filtered = filtered.filter(s => {
       const school = (s.school || '').toLowerCase()
-      return school === spellFilters.school.toLowerCase()
+      return spellFilters.school.some(sel => school === sel.toLowerCase())
     })
   }
 
@@ -6891,8 +6931,8 @@ function applySpellFilters() {
   // Update Clear Filters button state dynamically
   const clearBtn = document.getElementById('clear-spell-filters')
   if (clearBtn) {
-    const hasActive = spellFilters.query || spellFilters.level !== '' || spellFilters.source.length > 0 ||
-      spellFilters.school || spellFilters.ritual || spellFilters.concentration || spellFilters.homebrew || spellFilters.thirdParty
+    const hasActive = spellFilters.query || spellFilters.level.length > 0 || spellFilters.source.length > 0 ||
+      spellFilters.school.length > 0 || spellFilters.ritual || spellFilters.concentration || spellFilters.homebrew || spellFilters.thirdParty
     clearBtn.style.opacity = hasActive ? '1' : '0.4'
     clearBtn.style.pointerEvents = hasActive ? 'auto' : 'none'
     clearBtn.style.cursor = hasActive ? 'pointer' : 'not-allowed'
@@ -6902,8 +6942,8 @@ function applySpellFilters() {
 function clearSpellFilters() {
   spellFilters = {
     query: '',
-    level: '',
-    school: '',
+    level: [],
+    school: [],
     ritual: '',
     concentration: '',
     homebrew: '',
