@@ -161,6 +161,7 @@ function npcbDefaultDraft() {
     // NPC-specific fields
     properName: '', // "Mossy"
     notes: [],      // [{title:'', body:''}]
+    archived: false,
 
     // Reuse monster builder fields
     portrait: null,
@@ -217,6 +218,7 @@ function npcbDraftFromNPC(npc) {
   const d = npcbDefaultDraft()
   d.properName = npc.properName || npc.label || ''
   d.notes = npc.notes || []
+  d.archived = npc.archived || false
 
   // Helper to convert XML format saves/skills to builder format
   const ABILITY_NAMES = ['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA']
@@ -251,7 +253,7 @@ function npcbDraftFromNPC(npc) {
 
   // If NPC has _draft (was created from builder), restore it
   if (npc._draft) {
-    return {...d, ...npc._draft, properName: npc.properName || npc.label || '', notes: npc.notes || []}
+    return {...d, ...npc._draft, properName: npc.properName || npc.label || '', notes: npc.notes || [], archived: npc.archived || false}
   }
 
   // If size/type are missing, this NPC was imported from XML and based on a monster stat block
@@ -550,7 +552,7 @@ function npcbDraftFromMonster(monster) {
     d.alignment = (monster.alignment || '').replace(/^Typically\s+/i, '')
     d.alignmentTypically = /^Typically\s+/i.test(monster.alignment || '')
     d.tag = monster.tag || ''
-    d.source = monster.source || ''
+    d.source = Array.isArray(monster.source) ? monster.source.join(', ') : (monster.source || '')
 
     // Parse AC
     const acMatch = String(monster.ac || '10').match(/^(\d+)/)
@@ -566,6 +568,7 @@ function npcbDraftFromMonster(monster) {
     }
 
     d.speed = monster.speed || '30 ft.'
+    d.speedEntries = window.mbParseSpeed ? window.mbParseSpeed(d.speed) : [{type:'Walk',ft:30}]
     d.initiativeBonus = monster.initiativeBonus || 0
     d.proficiencyBonus = monster.proficiencyBonus || 0
 
@@ -867,6 +870,7 @@ function npcbRenderForm() {
       ${window.mbCardWrap('LAIR ACTIONS', `<div id="mb-sect-lairActions">${window.mbRenderAbilityGroup('lairActions', true)}</div>`)}
       ${window.mbCardWrap('SPELLS', `<div id="mb-sect-Spells">${window.mbRenderSpells()}</div>`)}
       ${npcbRenderNotes()}
+      ${window.mbCardWrap('ENVIRONMENT', window.mbRenderEnvironments())}
       ${window.mbCardWrap('DESCRIPTION', window.mbRenderDescription())}
       </div>
     </div>
@@ -1058,6 +1062,8 @@ function npcbBuildEntry(d) {
     spellAttackMod: d.spellAttackMod,
     campaignName: d.campaignName || undefined,
     slotsCurrent: d.slotsCurrent != null ? d.slotsCurrent : undefined,
+    environments: d.environments || [],
+    archived: d.archived || false,
   }
 }
 

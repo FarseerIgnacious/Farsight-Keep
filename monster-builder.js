@@ -23,6 +23,7 @@ const MB_CONDITIONS = ['Blinded','Charmed','Deafened','Exhaustion','Frightened',
 const MB_TAG_OPTIONS = {
   vulnerable: MB_DAMAGE_TYPES, resist: MB_DAMAGE_TYPES,
   immune: MB_DAMAGE_TYPES, conditionImmune: MB_CONDITIONS,
+  environments: MB_ENVIRONMENTS,
 }
 const MB_CR_TABLE = [
   {cr:'0',xp:10},{cr:'1/8',xp:25},{cr:'1/4',xp:50},{cr:'1/2',xp:100},
@@ -99,7 +100,7 @@ function mbModStr(score) { const m = mbMod(score); return m >= 0 ? `+${m}` : `${
 function mbSpeedStr(entries) {
   if (!entries || !entries.length) return '—'
   return entries.map(e => {
-    const ft = `${e.ft} ft.`
+    const ft = `${e.ft} ft.${e.descriptor ? ` (${e.descriptor})` : ''}`
     return e.type === 'Walk' ? ft : `${e.type.toLowerCase()} ${ft}`
   }).join(', ')
 }
@@ -109,12 +110,14 @@ function mbParseSpeed(str) {
   const entries = []
   str.split(',').forEach(part => {
     part = part.trim()
-    const m = part.match(/^(?:(burrow|climb|fly|swim)\s+)?(\d+)\s*ft\.?/i)
+    const m = part.match(/^(?:(burrow|climb|fly|swim)\s+)?(\d+)\s*ft\.?(?:\s*\(([^)]+)\))?/i)
     if (m) {
       const type = m[1] ? (m[1].charAt(0).toUpperCase() + m[1].slice(1).toLowerCase()) : 'Walk'
       const raw = parseInt(m[2])
-      const ft = Math.round(raw / 5) * 5 || 30
-      entries.push({type, ft})
+      const ft = raw === 0 ? 0 : (Math.round(raw / 5) * 5 || 30)
+      const entry = {type, ft}
+      if (m[3] && m[3].trim()) entry.descriptor = m[3].trim()
+      entries.push(entry)
     }
   })
   return entries.length ? entries : [{type:'Walk', ft:30}]
@@ -234,6 +237,9 @@ function mbFromCompendium(m) {
   // Read type directly (no longer using drum picker, so accept any value)
   d.type = m.type || 'Humanoid'
   d.tag = m.tag || ''  // FIX 3: Read tag field from monster data
+  d.source = Array.isArray(m.source) ? m.source.join(', ') : (m.source || '')
+  d.environments = Array.isArray(m.environments) ? m.environments : []
+  d.description = m.description || ''
   const rawAlign = (m.alignment||'').trim()
   if (rawAlign.toLowerCase().startsWith('typically ')) {
     d.alignmentTypically = true
@@ -701,7 +707,7 @@ function mbBuildCompendiumEntry(d) {
     tag: d.tag||'',
     homebrew: d.homebrew||false,
     thirdParty: d.thirdParty||false,
-    source: d.source||'',
+    source: splitSourceString(d.source||''),
     size: d.size, type: d.type,
     alignment: (d.alignmentTypically ? 'Typically ' : '') + (d.alignment||''),
     ac: d.acModifier && d.acModifier !== '—'
@@ -1371,7 +1377,8 @@ function mbRenderCombat() {
 
 function mbRenderSpeedPicker() {
   const entries = mb?.draft?.speedEntries || [{type:'Walk',ft:30}]
-  const ftItems = Array.from({length:60},(_,i)=>({value:(i+1)*5, label:`${(i+1)*5} ft.`}))
+  const nonWalkFtItems = Array.from({length:60},(_,i)=>({value:(i+1)*5, label:`${(i+1)*5} ft.`}))
+  const walkFtItems = [{value:0, label:'0 ft.'}, ...nonWalkFtItems]
   const sl = `font-size:9px;color:#C8C8C8;letter-spacing:.05em;margin-bottom:3px;`
   const entryHtml = entries.map((e,i) => `
     <div style="display:flex;gap:6px;align-items:flex-end;flex-shrink:0;">
@@ -1383,9 +1390,17 @@ function mbRenderSpeedPicker() {
       </div>
       <div>
         <div style="${sl}">FEET</div>
-        ${mbDrumPicker(`spd-ft-${i}`, ftItems, e.ft,
+        ${mbDrumPicker(`spd-ft-${i}`, e.type === 'Walk' ? walkFtItems : nonWalkFtItems, e.ft,
           v => { mbSpeedSetFt(i, parseInt(v)) },
           '95px')}
+      </div>
+      <div>
+        <div style="${sl}">DESCRIPTOR</div>
+        <input type="text" value="${mbEsc(e.descriptor||'')}" placeholder="e.g. hover"
+          onchange="mbSpeedSetDescriptor(${i}, this.value)"
+          style="width:100px;background:#1A1C1E;border:1px solid #2E2F2D;color:#e0d5c5;
+                 padding:6px 8px;border-radius:4px;font-size:12px;font-family:var(--app-font);
+                 outline:none;box-sizing:border-box;" />
       </div>
       ${entries.length > 1
         ? `<button onclick="mbSpeedRemove(${i})"
@@ -1406,8 +1421,10 @@ function mbRenderSpeedPicker() {
 }
 
 function mbSpeedSetType(idx, type) {
-  if (!mb.draft.speedEntries[idx]) return
-  mb.draft.speedEntries[idx].type = type
+  const entry = mb.draft.speedEntries[idx]
+  if (!entry) return
+  entry.type = type
+  if (type !== 'Walk' && entry.ft === 0) entry.ft = 5
   mb.dirty = true
   mb.draft.speed = mbSpeedStr(mb.draft.speedEntries)
   const el = document.getElementById('mb-speed-section')
@@ -1420,6 +1437,14 @@ function mbSpeedSetFt(idx, ft) {
   mb.draft.speed = mbSpeedStr(mb.draft.speedEntries)
   const el = document.getElementById('mb-speed-section')
   if (el) el.innerHTML = mbRenderSpeedPicker()
+}
+function mbSpeedSetDescriptor(idx, descriptor) {
+  if (!mb.draft.speedEntries[idx]) return
+  const trimmed = (descriptor||'').trim()
+  if (trimmed) mb.draft.speedEntries[idx].descriptor = trimmed
+  else delete mb.draft.speedEntries[idx].descriptor
+  mb.dirty = true
+  mb.draft.speed = mbSpeedStr(mb.draft.speedEntries)
 }
 function mbSpeedAdd() {
   mb.draft.speedEntries.push({type:'Walk', ft:30})
@@ -2267,20 +2292,10 @@ function mbFilterSpells(query) {
 }
 
 function mbRenderEnvironments() {
-  const d = mb.draft
   return `
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
-      ${MB_ENVIRONMENTS.map(env => {
-        const isOn = (d.environments||[]).includes(env)
-        return `
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;
-                      font-size:13px;color:#e0d5c5;padding:5px;"
-          onclick="mbToggleEnvironment('${env}',!${isOn})">
-          <div style="width:16px;height:16px;border-radius:50%;border:2px solid ${isOn?'#4587A2':'#666'};
-                      background:${isOn?'#4587A2':'transparent'};flex-shrink:0;transition:all 0.2s;"></div>
-          ${env}
-        </label>
-      `}).join('')}
+    <div>
+      <label style="${MBS.label}">ENVIRONMENTS</label>
+      ${mbRenderTagPicker('environments', MB_ENVIRONMENTS)}
     </div>
   `
 }
@@ -2766,14 +2781,6 @@ function mbRemoveSpell(idx) {
   })
 }
 
-// ── Environments ──────────────────────────────────────────────────
-function mbToggleEnvironment(env, on) {
-  if (!mb.draft.environments) mb.draft.environments = []
-  if (on) { if (!mb.draft.environments.includes(env)) mb.draft.environments.push(env) }
-  else mb.draft.environments = mb.draft.environments.filter(e => e !== env)
-  mb.dirty = true
-}
-
 // ── Portrait ──────────────────────────────────────────────────────
 function mbPortraitPick() {
   const input = document.createElement('input')
@@ -3149,7 +3156,7 @@ window.mbCancelSpellPick = mbCancelSpellPick
 window.mbAddSpellWithUsage = mbAddSpellWithUsage
 window.mbRemoveSpell = mbRemoveSpell
 window.mbFilterSpells = mbFilterSpells
-window.mbToggleEnvironment = mbToggleEnvironment
+window.mbRenderEnvironments = mbRenderEnvironments
 window.mbRefreshSection = mbRefreshSection
 window.mbUpdateHpAvg = mbUpdateHpAvg
 window.mbUpdateInitiative = mbUpdateInitiative
@@ -3159,6 +3166,7 @@ window.mbAvgHp = mbAvgHp
 window.mbModStr = mbModStr
 window.mbSpeedSetType = mbSpeedSetType
 window.mbSpeedSetFt = mbSpeedSetFt
+window.mbSpeedSetDescriptor = mbSpeedSetDescriptor
 window.mbSpeedAdd = mbSpeedAdd
 window.mbSpeedRemove = mbSpeedRemove
 window.mbDrumPicker = mbDrumPicker

@@ -195,7 +195,7 @@ function sbFromCompendium(spell) {
     duration: spell.duration || '',
     text: spell.text || '',
     classes: spell.classes || '',
-    source: spell.source || '',
+    source: Array.isArray(spell.source) ? spell.source.join(', ') : (spell.source || ''),
     homebrew: spell.homebrew === true,
     thirdParty: spell.thirdParty === true
   }
@@ -230,7 +230,7 @@ function sbToCompendium(draft) {
     duration: draft.duration.trim(),
     text: draft.text.trim(),
     classes: draft.classes.trim(),
-    source: draft.source.trim(),
+    source: splitSourceString(draft.source || ''),
     homebrew: draft.homebrew === true,
     thirdParty: draft.thirdParty === true,
     _custom: true

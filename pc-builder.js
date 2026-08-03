@@ -322,6 +322,7 @@ function pcbDraftFromPC(pc) {
     armor: pc.armor || '',
     hpValue: parseInt(pc.hpMax) || 10,
     speed: pc.speed || '30 ft.',
+    speedEntries: window.mbParseSpeed ? window.mbParseSpeed(pc.speed || '30 ft.') : [{type:'Walk',ft:30}],
     initiativeBonus: parseInt(pc.init) || 0,
 
     // Skills and saves
@@ -919,7 +920,7 @@ function pcbRenderSlotGrid() {
   if (!showSlots) return ''
 
   return `
-    <div style="font-size:11px;color:#8b0000;font-weight:700;letter-spacing:.08em;
+    <div style="font-size:11px;color:#7B9BA8;font-weight:700;letter-spacing:.08em;
                 margin-bottom:8px;margin-top:10px;">SPELL SLOTS</div>
     <div style="display:flex;gap:6px;margin-bottom:10px;">
       ${['1st','2nd','3rd','4th','5th','6th','7th','8th','9th'].map((lvl,i) => `

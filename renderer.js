@@ -2311,28 +2311,28 @@ function render() {
         <div style="display:flex;align-items:center;position:relative;z-index:1;
                     padding:10px 20px 10px 240px;min-height:100%;gap:0;justify-content:space-between;">
           <div style="display:flex;gap:0;">
-            <div onclick="showSection('home')" class="nav-btn" id="nav-home"
+            <div onclick="guardedShowSection('home')" class="nav-btn" id="nav-home"
               style="cursor:pointer;pointer-events:auto;
                      display:block;margin:0 4px 0 0;">
               <img src="assets/${tabImages.home}" alt="home"
                 style="display:block;height:90px;width:auto;object-fit:contain;
                        pointer-events:none;" />
             </div>
-            <div onclick="showSection('characters')" class="nav-btn" id="nav-characters"
+            <div onclick="guardedShowSection('characters')" class="nav-btn" id="nav-characters"
               style="cursor:pointer;pointer-events:auto;
                      display:block;margin:0 4px 0 0;">
               <img src="assets/${tabImages.characters}" alt="characters"
                 style="display:block;height:90px;width:auto;object-fit:contain;
                        pointer-events:none;" />
             </div>
-            <div onclick="showSection('encounters')" class="nav-btn" id="nav-encounters"
+            <div onclick="guardedShowSection('encounters')" class="nav-btn" id="nav-encounters"
               style="cursor:pointer;pointer-events:auto;
                      display:block;margin:0 4px 0 0;">
               <img src="assets/${tabImages.encounters}" alt="encounters"
                 style="display:block;height:90px;width:auto;object-fit:contain;
                        pointer-events:none;" />
             </div>
-            <div onclick="showSection('notes')" class="nav-btn" id="nav-notes"
+            <div onclick="guardedShowSection('notes')" class="nav-btn" id="nav-notes"
               style="cursor:pointer;pointer-events:auto;
                      display:block;margin:0 4px 0 0;">
               <img src="assets/${tabImages.notes}" alt="notes"
@@ -2351,7 +2351,7 @@ function render() {
                                         -1px 1px 0 #445E22, 1px 1px 0 #445E22;">
                 CURRENT CAMPAIGN
               </label>
-              <select id="campaign-selector" onchange="switchCampaign(this.value)"
+              <select id="campaign-selector" onchange="guardedSwitchCampaign(this.value, this)"
                 style="background:#5C5C5C;border:4px solid #2E2F2D;color:#1E231A;
                        padding:6px 12px;border-radius:4px;font-size:13px;font-family:var(--app-font);
                        cursor:pointer;min-width:150px;">
@@ -2365,14 +2365,14 @@ function render() {
           ` : ''}
 
           <div style="display:flex;gap:0;">
-            <div onclick="showSection('monsters')" class="nav-btn" id="nav-monsters"
+            <div onclick="guardedShowSection('monsters')" class="nav-btn" id="nav-monsters"
               style="cursor:pointer;pointer-events:auto;
                      display:block;margin:0 4px 0 0;">
               <img src="assets/${tabImages.monsters}" alt="monsters"
                 style="display:block;height:90px;width:auto;object-fit:contain;
                        pointer-events:none;" />
             </div>
-            <div onclick="showSection('spells')" class="nav-btn" id="nav-spells"
+            <div onclick="guardedShowSection('spells')" class="nav-btn" id="nav-spells"
               style="cursor:pointer;pointer-events:auto;
                      display:block;margin:0 4px 0 0;">
               <img src="assets/${tabImages.spells}" alt="spells"
@@ -2419,6 +2419,98 @@ function updateNavBar() {
   // Nav buttons are now styled purely by their images, no dynamic styling needed
 }
 
+// ── Unsaved-changes guard (Monster/NPC/PC/Spell builders share this check) ──
+function anyBuilderDirty() {
+  return !!(typeof mb !== 'undefined' && mb && mb.dirty) ||
+         !!(typeof npcb !== 'undefined' && npcb && npcb.dirty) ||
+         !!(typeof pcb !== 'undefined' && pcb && pcb.dirty) ||
+         !!(typeof sb !== 'undefined' && sb && sb.dirty)
+}
+window.anyBuilderDirty = anyBuilderDirty
+
+function discardAllBuilderDrafts() {
+  if (typeof mb !== 'undefined' && mb) { mb.draft = null; mb.dirty = false }
+  if (typeof npcb !== 'undefined' && npcb) { npcb.draft = null; npcb.dirty = false }
+  if (typeof pcb !== 'undefined' && pcb) { pcb.draft = null; pcb.dirty = false }
+  if (typeof sb !== 'undefined' && sb) { sb.dirty = false }
+}
+window.discardAllBuilderDrafts = discardAllBuilderDrafts
+
+// Top-nav buttons (Home/Characters/Encounters/Notes/Monsters/Spells) call this instead of
+// showSection() directly, so leaving an open builder with unsaved edits via the nav bar gets
+// the same "Discard Changes?" confirmation the builders' own in-page Back buttons already show.
+function guardedShowSection(section) {
+  if (!anyBuilderDirty()) { showSection(section); return }
+  const overlay = document.createElement('div')
+  overlay.id = 'nav-discard-overlay'
+  overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;
+    display:flex;align-items:center;justify-content:center;`
+  overlay.innerHTML = `
+    <div style="background:#262F35;border:2px solid #8b0000;border-radius:8px;
+                padding:28px 32px;max-width:340px;text-align:center;font-family:var(--app-font);">
+      <div style="font-size:16px;font-weight:bold;color:#e0d5c5;margin-bottom:10px;">Discard Changes?</div>
+      <div style="color:#C8C8C8;font-size:13px;margin-bottom:22px;line-height:1.6;">
+        You have unsaved changes that will be lost.
+      </div>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        <button onclick="document.getElementById('nav-discard-overlay').remove();discardAllBuilderDrafts();showSection('${section}')"
+          style="background:#8b0000;color:#e0d5c5;border:none;padding:8px 20px;
+                 cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+          Discard
+        </button>
+        <button onclick="document.getElementById('nav-discard-overlay').remove()"
+          style="background:none;border:1px solid #2E2F2D;color:#C8C8C8;padding:8px 20px;
+                 cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+          Keep Editing
+        </button>
+      </div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+}
+window.guardedShowSection = guardedShowSection
+
+// The campaign selector in the persistent top nav bar has the same gap as the six nav
+// icons - switching campaigns while a builder is open would otherwise silently discard.
+function guardedSwitchCampaign(value, selectEl) {
+  if (!anyBuilderDirty()) { switchCampaign(value); return }
+  const overlay = document.createElement('div')
+  overlay.id = 'nav-discard-overlay'
+  overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;
+    display:flex;align-items:center;justify-content:center;`
+  overlay.innerHTML = `
+    <div style="background:#262F35;border:2px solid #8b0000;border-radius:8px;
+                padding:28px 32px;max-width:340px;text-align:center;font-family:var(--app-font);">
+      <div style="font-size:16px;font-weight:bold;color:#e0d5c5;margin-bottom:10px;">Discard Changes?</div>
+      <div style="color:#C8C8C8;font-size:13px;margin-bottom:22px;line-height:1.6;">
+        You have unsaved changes that will be lost.
+      </div>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        <button onclick="document.getElementById('nav-discard-overlay').remove();discardAllBuilderDrafts();switchCampaign('${value.replace(/'/g, "\\'")}')"
+          style="background:#8b0000;color:#e0d5c5;border:none;padding:8px 20px;
+                 cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+          Discard
+        </button>
+        <button onclick="document.getElementById('nav-discard-overlay').remove();const sel=document.getElementById('campaign-selector');if(sel)sel.value=compendiumData.activeCampaign"
+          style="background:none;border:1px solid #2E2F2D;color:#C8C8C8;padding:8px 20px;
+                 cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+          Keep Editing
+        </button>
+      </div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+}
+window.guardedSwitchCampaign = guardedSwitchCampaign
+
+// Warn before quitting/closing the app entirely with unsaved builder edits.
+window.addEventListener('beforeunload', (e) => {
+  if (anyBuilderDirty()) {
+    e.preventDefault()
+    e.returnValue = ''
+  }
+})
+
 // ── Navigation ────────────────────────────────────────────────────
 function showSection(section, skipHistory = false) {
   if (!skipHistory) pushNav(section, null)
@@ -2442,9 +2534,12 @@ function showSection(section, skipHistory = false) {
       type: '',
       homebrew: '',
       thirdParty: '',
-      environment: '',
-      spellcaster: ''
+      environment: [],
+      spellcaster: '',
+      source: []
     }
+    filterTagPickerOpen = null
+    filterTagPickerQuery = ''
   } else if (section === 'spells') {
     spellFilters = {
       query: '',
@@ -2453,8 +2548,11 @@ function showSection(section, skipHistory = false) {
       ritual: '',
       concentration: '',
       homebrew: '',
-      thirdParty: ''
+      thirdParty: '',
+      source: []
     }
+    filterTagPickerOpen = null
+    filterTagPickerQuery = ''
   }
 
   if (section === 'home')            renderHome(content)
@@ -2473,6 +2571,7 @@ function renderHome(container) {
   const hasCompendium = compendiumData.monsters.length > 0 || compendiumData.spells.length > 0
   const hasCampaign   = compendiumData.players.length > 0 || compendiumData.npcs.length > 0
   const campaigns     = Object.keys(compendiumData.campaigns || {})
+  const homeNpcs      = compendiumData.npcs.filter(n => !n.archived)
 
   const cardStyle = (active) =>
     `background:#262F35;border:2px solid ${active ? '#4a9a9a' : '#1e2d4a'};
@@ -2590,7 +2689,7 @@ function renderHome(container) {
                        white-space:nowrap;font-weight:700;">
                 + Create NPC
               </button>
-              ${compendiumData.npcs.length > 0 ? `
+              ${homeNpcs.length > 0 ? `
                 <button onclick="showSection('characters')"
                   style="background:none;border:none;color:#1E231A;font-size:12px;cursor:pointer;
                          font-family:var(--app-font);padding:0;">
@@ -2599,9 +2698,9 @@ function renderHome(container) {
               ` : ''}
             </div>
           </div>
-          ${compendiumData.npcs.length > 0 ? `
+          ${homeNpcs.length > 0 ? `
             <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">
-              ${compendiumData.npcs.map(p => `
+              ${homeNpcs.map(p => `
               <div onclick="showNPC(decodeURIComponent(this.dataset.uid))" data-uid="${encodeURIComponent(p.uid)}"
                 style="background:#262F35;border:1px solid #1e2d4a;padding:14px;border-radius:5px;
                        cursor:pointer;position:relative;"
@@ -2686,8 +2785,7 @@ function renderEncounters(container) {
       ${!campaign ? `
         <p style="color:#e0d5c5;">Create a new campaign or import one in settings to manage encounters!</p>
       ` : list.length === 0 ? `
-        <div style="color:#555;text-align:center;padding:60px 0;">
-          <div style="font-size:40px;opacity:.2;margin-bottom:12px;">&#9876;</div>
+        <div style="color:#1E231A;background:#5C5C5C;text-align:center;padding:60px 0;border:4px solid #445E22;border-radius:8px;">
           <p>No encounters saved yet. Click "+ Add Encounter" to create one.</p>
         </div>
       ` : list.map(e => {
@@ -2802,6 +2900,7 @@ function runEncounter(id) {
       if (savedState) {
         // Restore truly dynamic combat state
         c.hpCurrent = savedState.hpCurrent
+        c.tempHp = savedState.tempHp || 0
         // NOTE: Do NOT restore hpMax, ac, abilities - those are static character stats
         // that should come from the base combatant data (which migration updates)
         c.initiative = savedState.initiative
@@ -2826,6 +2925,7 @@ function runEncounter(id) {
     // Fresh start - reset HP and combat state
     enc.current.combatants.forEach(c => {
       c.hpCurrent = c.hpMax
+      c.tempHp = 0
       // Backwards compatibility: default isEnemy for old saves
       if (c.isEnemy === undefined) {
         c.isEnemy = !c.isPC
@@ -3006,6 +3106,7 @@ function refreshInitSidebar() {
   }
   sidebar.innerHTML = roundHeader + combatants.map((c, i) => {
     const pct = c.hpMax > 0 ? Math.max(0, Math.min(100, (c.hpCurrent / c.hpMax) * 100)) : 100
+    const tempPct = c.hpMax > 0 ? Math.max(0, Math.min(100, ((c.tempHp||0) / c.hpMax) * 100)) : 0
     const barColor = pct > 50 ? '#2a7a2a' : pct > 25 ? '#7a6a00' : '#8a0000'
     const isActive = enc.inCombat && i === enc.turn
     return `
@@ -3024,11 +3125,12 @@ function refreshInitSidebar() {
             <div style="font-size:11px;color:#C8C8C8;flex-shrink:0;margin-left:4px;">${c.initiative}</div>
           </div>
           <div style="font-size:11px;color:#C8C8C8;margin-bottom:3px;">
-            AC ${(() => { const n = parseInt(c.ac); return !isNaN(n) ? n : (c.ac || '—') })()} · ${c.hpCurrent}/${c.hpMax} HP
+            AC ${(() => { const n = parseInt(c.ac); return !isNaN(n) ? n : (c.ac || '—') })()} · ${c.tempHp > 0 ? `<span style="color:#e0c840;margin-right:4px;">${c.tempHp}</span>` : ''}${c.hpCurrent}/${c.hpMax} HP
             ${c.hpCurrent <= 0 ? '<span style="font-weight:bold;color:#ff0000;margin-left:6px;">DEAD</span>' : ''}
           </div>
-          <div style="height:4px;background:#1e2d4a;border-radius:2px;">
+          <div style="height:4px;background:#1e2d4a;border-radius:2px;position:relative;">
             <div style="width:${pct}%;height:100%;background:${barColor};border-radius:2px;"></div>
+            ${c.tempHp > 0 ? `<div style="position:absolute;top:0;left:0;width:${tempPct}%;height:100%;background:#e0c840;border-radius:2px;"></div>` : ''}
           </div>
         </div>
         <button id="remove-btn-${c.uid}"
@@ -3101,10 +3203,9 @@ function refreshCards() {
   if (combatants.length === 0) {
     center.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:center;
-                  flex:1;color:#333;text-align:center;min-height:300px;">
-        <div>
-          <div style="font-size:48px;opacity:.1;margin-bottom:12px;">&#9876;</div>
-          <p style="font-size:13px;">Use the <strong style="color:#555;">+</strong> button to add combatants</p>
+                  flex:1;text-align:center;min-height:300px;">
+        <div style="color:#1E231A;background:#5C5C5C;padding:24px 32px;border:4px solid #445E22;border-radius:8px;">
+          <p style="font-size:13px;">Use the <strong style="color:#1E231A;">+</strong> button to add combatants</p>
         </div>
       </div>`
     return
@@ -3130,6 +3231,7 @@ function hpBarColor(pct) {
 
 function buildCard(c, isActive) {
   const pct = c.hpMax > 0 ? Math.max(0, Math.min(100, (c.hpCurrent / c.hpMax) * 100)) : 100
+  const tempPct = c.hpMax > 0 ? Math.max(0, Math.min(100, ((c.tempHp||0) / c.hpMax) * 100)) : 0
 
   // Helper to calculate ability modifier
   function abilityMod(score) {
@@ -3553,22 +3655,22 @@ function buildCard(c, isActive) {
             const speedStr = String(c.speed).toLowerCase()
             const movements = []
 
-            // Match patterns like "30 ft.", "fly 60 ft.", "60 ft. fly", etc.
+            // Match patterns like "30 ft.", "fly 60 ft.", "60 ft. fly", optionally with a "(descriptor)" suffix
             // First, try to extract base walking speed (first number without a type label)
-            const walkMatch = speedStr.match(/^(\d+)\s*(?:ft\.?)?(?:\s*,|$)/)
+            const walkMatch = speedStr.match(/^(\d+)\s*(?:ft\.?)?(?:\s*\(([^)]+)\))?(?:\s*,|$)/)
             if (walkMatch) {
-              movements.push({ type: 'walk', value: walkMatch[1] })
+              movements.push({ type: 'walk', value: walkMatch[1], descriptor: walkMatch[2] || '' })
             }
 
             // Extract other movement types (fly, climb, burrow, swim)
             const types = ['fly', 'climb', 'burrow', 'swim']
             types.forEach(type => {
-              // Match "fly 60 ft." or "60 ft. fly"
-              const regex1 = new RegExp(type + '\\s+(\\d+)\\s*(?:ft\\.?)?', 'i')
-              const regex2 = new RegExp('(\\d+)\\s*(?:ft\\.?)?\\s+' + type, 'i')
+              // Match "fly 60 ft." or "60 ft. fly", optionally with a "(descriptor)" suffix
+              const regex1 = new RegExp(type + '\\s+(\\d+)\\s*(?:ft\\.?)?(?:\\s*\\(([^)]+)\\))?', 'i')
+              const regex2 = new RegExp('(\\d+)\\s*(?:ft\\.?)?(?:\\s*\\(([^)]+)\\))?\\s+' + type, 'i')
               const match = speedStr.match(regex1) || speedStr.match(regex2)
               if (match) {
-                movements.push({ type, value: match[1] })
+                movements.push({ type, value: match[1], descriptor: match[2] || '' })
               }
             })
 
@@ -3579,7 +3681,8 @@ function buildCard(c, isActive) {
 
             // If only one movement type, display normally on one line
             if (movements.length === 1) {
-              return '<div style="font-size:15px;font-weight:bold;">' + movements[0].value + ' ft.</div>'
+              const suffix = movements[0].descriptor ? ' (' + movements[0].descriptor + ')' : ''
+              return '<div style="font-size:15px;font-weight:bold;">' + movements[0].value + ' ft.' + suffix + '</div>'
             }
 
             // Multiple movement types: stack vertically with smaller font
@@ -3588,7 +3691,8 @@ function buildCard(c, isActive) {
 
             return movements.map((m, i) => {
               const label = m.type === 'walk' ? '' : (m.type.charAt(0).toUpperCase() + m.type.slice(1) + ' ')
-              return '<div style="font-size:' + fontSize + 'px;font-weight:bold;line-height:1.3;">' + label + m.value + ' ft.</div>'
+              const suffix = m.descriptor ? ' (' + m.descriptor + ')' : ''
+              return '<div style="font-size:' + fontSize + 'px;font-weight:bold;line-height:1.3;">' + label + m.value + ' ft.' + suffix + '</div>'
             }).join('')
           })()}
         </div>
@@ -3598,19 +3702,21 @@ function buildCard(c, isActive) {
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
           <span style="font-size:13px;color:#C8C8C8;">HP</span>
           <div style="display:flex;align-items:center;gap:8px;">
-            <span style="font-size:15px;font-weight:bold;">${c.hpCurrent} / ${c.hpMax}</span>
+            <span style="font-size:15px;font-weight:bold;">${c.tempHp > 0 ? `<span style="color:#e0c840;margin-right:4px;">${c.tempHp}</span>` : ''}${c.hpCurrent} / ${c.hpMax}</span>
             ${c.hpCurrent <= 0 ? '<span style="font-size:13px;font-weight:bold;color:#ff0000;">DEAD</span>' : ''}
           </div>
         </div>
-        <div style="height:8px;background:#1a1a1a;border-radius:4px;">
+        <div style="height:8px;background:#1a1a1a;border-radius:4px;position:relative;">
           <div style="width:${pct}%;height:100%;background:${hpBarColor(pct)};
                       border-radius:4px;transition:width .3s,background .3s;"></div>
+          ${c.tempHp > 0 ? `<div style="position:absolute;top:0;left:0;width:${tempPct}%;height:100%;
+                      background:#e0c840;border-radius:4px;transition:width .3s;"></div>` : ''}
         </div>
       </div>
 
       <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;">
         <input id="hp-input-${c.uid}" type="number" placeholder="Amount" min="0"
-          style="flex:1;min-width:0;background:#1A1C1E;border:1px solid #1e2d4a;color:#e0d5c5;
+          style="width:88px;background:#1A1C1E;border:1px solid #1e2d4a;color:#e0d5c5;
                  padding:6px 8px;border-radius:3px;font-size:14px;font-family:var(--app-font);
                  -moz-appearance:textfield;"
           onkeydown="if(event.key==='Enter'){applyDamage('${c.uid}')}" />
@@ -3622,6 +3728,10 @@ function buildCard(c, isActive) {
           style="background:#082012;color:#80c880;border:1px solid #1a6a2a;padding:6px 10px;
                  cursor:pointer;border-radius:3px;font-size:13px;font-family:var(--app-font);">
           Heal</button>
+        <button onclick="applyTempHp('${c.uid}')"
+          style="background:#3a3000;color:#e0c840;border:1px solid #6a5a00;padding:6px 10px;
+                 cursor:pointer;border-radius:3px;font-size:13px;font-family:var(--app-font);">
+          Temp</button>
       </div>
 
       <div style="margin-bottom:10px;">
@@ -3918,7 +4028,7 @@ function renderAddPanel() {
   const panel = document.getElementById('enc-add-panel')
   if (!panel) return
   const pcs = compendiumData.players
-  const npcs = compendiumData.npcs
+  const npcs = compendiumData.npcs.filter(n => !n.archived)
   const filtered = enc.monsterQ
     ? compendiumData.monsters.filter(m => m.name.toLowerCase().includes(enc.monsterQ.toLowerCase())).slice(0, 40)
     : compendiumData.monsters.slice(0, 40)
@@ -4236,6 +4346,7 @@ function addFromPC(uid) {
     speed: pc.speed,
     hpMax: hpMax,
     hpCurrent: hpCurrent,
+    tempHp: 0,
     str: parseInt(abilities[0]) || 10,
     dex: parseInt(abilities[1]) || 10,
     con: parseInt(abilities[2]) || 10,
@@ -4357,6 +4468,7 @@ function addFromNPC(uid) {
     speed: npc.speed,
     hpMax: parseInt(npc.hpMax) || 1,
     hpCurrent: parseInt(npc.hpCurrent) || parseInt(npc.hpMax) || 1,
+    tempHp: 0,
     str: parseInt(abilities[0]) || parseInt(npc.str) || 10,
     dex: parseInt(abilities[1]) || parseInt(npc.dex) || 10,
     con: parseInt(abilities[2]) || parseInt(npc.con) || 10,
@@ -4512,6 +4624,7 @@ function addMonsterAsIs(name) {
     speed: m.speed,
     hpMax: hpNum,
     hpCurrent: hpNum,
+    tempHp: 0,
     str: parseInt(m.str) || 10,
     dex: parseInt(m.dex) || 10,
     con: parseInt(m.con) || 10,
@@ -4604,7 +4717,7 @@ function addCustomCombatant() {
   enc.current.combatants.push({
     uid: makeCombatantUid(),
     name, type: 'Custom', initiative: initRoll,
-    ac, speed: '', hpMax: hp, hpCurrent: hp,
+    ac, speed: '', hpMax: hp, hpCurrent: hp, tempHp: 0,
     conditions: [], traits: [], actions: [], spellSlots: null, dailySpells: null,
   })
   if (nameEl) nameEl.value = ''
@@ -4648,7 +4761,23 @@ function applyDamage(uid) {
   if (isNaN(amount) || amount <= 0) return
   const c = enc.current?.combatants.find(x => x.uid === uid)
   if (!c) return
-  c.hpCurrent = Math.max(0, c.hpCurrent - amount)
+  let remaining = amount
+  const fromTemp = Math.min(c.tempHp||0, remaining)
+  c.tempHp = (c.tempHp||0) - fromTemp
+  remaining -= fromTemp
+  c.hpCurrent = Math.max(0, c.hpCurrent - remaining)
+  if (input) input.value = ''
+  refreshInitSidebar()
+  refreshCards()
+}
+
+function applyTempHp(uid) {
+  const input  = document.getElementById('hp-input-' + uid)
+  const amount = parseInt(input?.value)
+  if (isNaN(amount) || amount <= 0) return
+  const c = enc.current?.combatants.find(x => x.uid === uid)
+  if (!c) return
+  c.tempHp = Math.max(c.tempHp||0, amount)
   if (input) input.value = ''
   refreshInitSidebar()
   refreshCards()
@@ -4897,6 +5026,7 @@ function saveEncounterPrompt() {
         uid: c.uid,
         hpCurrent: c.hpCurrent,
         hpMax: c.hpMax,
+        tempHp: c.tempHp || 0,
         initiative: c.initiative,
         conditions: [...c.conditions],
         isEnemy: c.isEnemy,
@@ -5164,8 +5294,156 @@ let monsterFilters = {
   type: '',
   homebrew: '',
   thirdParty: '',
-  environment: '',
-  spellcaster: ''
+  environment: [],
+  spellcaster: '',
+  source: []
+}
+
+// ── Multi-select filter tag pickers (Environment / Source, Monsters + Spells tabs) ──
+// Same visual/interaction language as the builders' shared tag-picker (monster-builder.js
+// mbRenderTagPicker), but that component is wired directly to mb.draft[field] for editing
+// a single entity, so filtering needs its own thin variant targeting monsterFilters/spellFilters.
+let filterTagPickerOpen = null
+let filterTagPickerQuery = ''
+
+function filterTagKindConfig(kind) {
+  switch (kind) {
+    case 'monster-environment':
+      return {
+        label: 'Environment',
+        getSelected: () => monsterFilters.environment,
+        getOptions: () => [...new Set(compendiumData.monsters.flatMap(m => m.environments || []))].sort(),
+        apply: applyMonsterFilters,
+      }
+    case 'monster-source':
+      return {
+        label: 'Source',
+        getSelected: () => monsterFilters.source,
+        getOptions: () => {
+          const opts = [...new Set(compendiumData.monsters.flatMap(m => (m.source && m.source.length) ? m.source : []))].sort()
+          opts.push('No Source')
+          return opts
+        },
+        apply: applyMonsterFilters,
+      }
+    case 'spell-source':
+      return {
+        label: 'Source',
+        getSelected: () => spellFilters.source,
+        getOptions: () => {
+          const opts = [...new Set(compendiumData.spells.flatMap(s => (s.source && s.source.length) ? s.source : []))].sort()
+          opts.push('No Source')
+          return opts
+        },
+        apply: applySpellFilters,
+      }
+  }
+}
+
+function refreshAllFilterTagPickers() {
+  ['monster-environment', 'monster-source', 'spell-source'].forEach(kind => {
+    const el = document.getElementById('filter-tagpicker-' + kind)
+    if (el) el.innerHTML = renderFilterTagPickerInner(kind)
+  })
+}
+
+function refreshActiveFilterChips() {
+  const elM = document.getElementById('monster-filter-chips')
+  if (elM) elM.innerHTML = renderActiveFilterChipsHtml('monster')
+  const elS = document.getElementById('spell-filter-chips')
+  if (elS) elS.innerHTML = renderActiveFilterChipsHtml('spell')
+}
+
+function toggleFilterTagPickerOpen(kind) {
+  filterTagPickerOpen = (filterTagPickerOpen === kind) ? null : kind
+  filterTagPickerQuery = ''
+  refreshAllFilterTagPickers()
+}
+
+function toggleFilterTagValue(kind, value) {
+  const cfg = filterTagKindConfig(kind)
+  const arr = cfg.getSelected()
+  const idx = arr.indexOf(value)
+  if (idx === -1) arr.push(value); else arr.splice(idx, 1)
+  cfg.apply()
+  refreshAllFilterTagPickers()
+  refreshActiveFilterChips()
+}
+
+function renderFilterTagOptionsList(kind) {
+  const cfg = filterTagKindConfig(kind)
+  const selected = cfg.getSelected()
+  const q = (filterTagPickerQuery || '').toLowerCase()
+  const options = cfg.getOptions().filter(o => o.toLowerCase().includes(q))
+  if (options.length === 0) {
+    return `<div style="padding:6px 8px;font-size:11px;color:#888;font-style:italic;">No matches</div>`
+  }
+  return options.map(o => {
+    const isOn = selected.includes(o)
+    return `
+    <div onclick="toggleFilterTagValue('${kind}','${o.replace(/'/g, "\\'")}')"
+      style="display:flex;align-items:center;gap:6px;padding:5px 6px;cursor:pointer;
+             border-radius:3px;font-size:12px;color:${isOn ? '#e0d5c5' : '#7B9BA8'};
+             background:${isOn ? '#2a3a42' : 'transparent'};"
+      onmouseover="this.style.background='#243139'"
+      onmouseout="this.style.background='${isOn ? '#2a3a42' : 'transparent'}'">
+      <div style="width:13px;height:13px;border:2px solid ${isOn ? '#4587A2' : '#666'};
+                  border-radius:3px;background:${isOn ? '#4587A2' : 'transparent'};flex-shrink:0;"></div>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${o}</span>
+    </div>`
+  }).join('')
+}
+
+function renderFilterTagPickerInner(kind) {
+  const cfg = filterTagKindConfig(kind)
+  const selected = cfg.getSelected()
+  const isOpen = filterTagPickerOpen === kind
+  const triggerLabel = selected.length > 0 ? `${cfg.label} (${selected.length})` : `All ${cfg.label}s`
+  const filterStyle = `background:#1A1C1E;border:1px solid #2E2F2D;color:#e0d5c5;
+    font-family:var(--app-font);padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;
+    max-width:110px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;`
+
+  const panelHtml = !isOpen ? '' : `
+    <div style="position:absolute;top:100%;left:0;margin-top:4px;z-index:20;
+                background:#1A1C1E;border:1px solid #2E2F2D;border-radius:4px;
+                width:220px;padding:8px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+      <input placeholder="Filter…" value="${mbEsc(filterTagPickerQuery)}"
+        oninput="filterTagPickerQuery=this.value;document.getElementById('filter-tagopts-${kind}').innerHTML=renderFilterTagOptionsList('${kind}')"
+        style="width:100%;box-sizing:border-box;padding:5px 8px;font-size:12px;margin-bottom:6px;
+               background:#0d0f10;border:1px solid #2E2F2D;border-radius:3px;color:#e0d5c5;">
+      <div id="filter-tagopts-${kind}" style="max-height:160px;overflow-y:auto;">
+        ${renderFilterTagOptionsList(kind)}
+      </div>
+    </div>`
+
+  return `
+    <div style="position:relative;display:inline-block;">
+      <button onclick="toggleFilterTagPickerOpen('${kind}')"
+        style="${filterStyle}${selected.length > 0 ? 'border-color:#4587A2;color:#7B9BA8;' : ''}">
+        ${triggerLabel} &#9662;
+      </button>
+      ${panelHtml}
+    </div>`
+}
+
+function renderActiveFilterChipsHtml(tab) {
+  const kinds = tab === 'monster' ? ['monster-environment', 'monster-source'] : ['spell-source']
+  const chips = []
+  kinds.forEach(kind => {
+    filterTagKindConfig(kind).getSelected().forEach(val => chips.push({ kind, val }))
+  })
+  if (chips.length === 0) return ''
+  return `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+      ${chips.map(c => `
+        <span style="display:inline-flex;align-items:center;gap:5px;background:#1A1C1E;
+                     border:1px solid #4587A2;border-radius:3px;padding:3px 8px;font-size:11px;color:#e0d5c5;">
+          ${c.val}
+          <button onclick="toggleFilterTagValue('${c.kind}','${c.val.replace(/'/g, "\\'")}')"
+            style="background:none;border:none;color:#4587A2;cursor:pointer;font-size:13px;line-height:1;padding:0;">&#215;</button>
+        </span>
+      `).join('')}
+    </div>`
 }
 
 function renderMonsters(container) {
@@ -5197,7 +5475,8 @@ function renderMonsters(container) {
     font-family:var(--app-font);padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;`
 
   const hasActiveFilters = monsterFilters.query || monsterFilters.cr || monsterFilters.type ||
-    monsterFilters.homebrew || monsterFilters.thirdParty || monsterFilters.environment || monsterFilters.spellcaster
+    monsterFilters.homebrew || monsterFilters.thirdParty || monsterFilters.environment.length > 0 ||
+    monsterFilters.spellcaster || monsterFilters.source.length > 0
 
   container.innerHTML = `
     <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;">
@@ -5228,11 +5507,8 @@ function renderMonsters(container) {
         ${uniqueTypes.map(type => `<option value="${type}" ${monsterFilters.type === type ? 'selected' : ''}>${type}</option>`).join('')}
       </select>
 
-      <select onchange="monsterFilters.environment=this.value;applyMonsterFilters()" style="${filterStyle}">
-        <option value="">All Environments</option>
-        ${['Arctic','Coastal','Desert','Forest','Grassland','Hill','Mountain','Swamp','Underdark','Underwater','Urban']
-          .map(env => `<option value="${env}" ${monsterFilters.environment === env ? 'selected' : ''}>${env}</option>`).join('')}
-      </select>
+      <div id="filter-tagpicker-monster-environment">${renderFilterTagPickerInner('monster-environment')}</div>
+      <div id="filter-tagpicker-monster-source">${renderFilterTagPickerInner('monster-source')}</div>
 
       ${threeStateToggle('homebrew', 'Homebrew')}
       ${threeStateToggle('thirdParty', 'Third Party')}
@@ -5245,6 +5521,8 @@ function renderMonsters(container) {
         Clear Filters
       </button>
     </div>
+
+    <div id="monster-filter-chips">${renderActiveFilterChipsHtml('monster')}</div>
 
     <div id="monster-grid"
       style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
@@ -5301,15 +5579,21 @@ function applyMonsterFilters() {
     filtered = filtered.filter(m => !(m._draft?.thirdParty || m.thirdParty))
   }
 
-  // Environment filter
-  if (monsterFilters.environment) {
+  // Environment filter (OR across selected tags)
+  if (monsterFilters.environment.length > 0) {
     filtered = filtered.filter(m => {
       const envs = m.environments || m.environment
       if (!envs) return false
-      if (Array.isArray(envs)) {
-        return envs.includes(monsterFilters.environment)
-      }
-      return (envs || '').includes(monsterFilters.environment)
+      const envArr = Array.isArray(envs) ? envs : [envs]
+      return monsterFilters.environment.some(sel => envArr.includes(sel))
+    })
+  }
+
+  // Source filter (OR across selected tags)
+  if (monsterFilters.source.length > 0) {
+    filtered = filtered.filter(m => {
+      return monsterFilters.source.some(sel =>
+        sel === 'No Source' ? (!m.source || !m.source.length) : (m.source || []).includes(sel))
     })
   }
 
@@ -5342,8 +5626,8 @@ function applyMonsterFilters() {
   if (clearBtn) {
     const hasActive = monsterFilters.query || monsterFilters.cr ||
       monsterFilters.type || monsterFilters.homebrew ||
-      monsterFilters.thirdParty || monsterFilters.environment ||
-      monsterFilters.spellcaster
+      monsterFilters.thirdParty || monsterFilters.environment.length > 0 ||
+      monsterFilters.spellcaster || monsterFilters.source.length > 0
     clearBtn.style.opacity = hasActive ? '1' : '0.4'
     clearBtn.style.pointerEvents = hasActive ? 'auto' : 'none'
     clearBtn.style.cursor = hasActive ? 'pointer' : 'not-allowed'
@@ -5357,9 +5641,12 @@ function clearMonsterFilters() {
     type: '',
     homebrew: '',
     thirdParty: '',
-    environment: '',
-    spellcaster: ''
+    environment: [],
+    spellcaster: '',
+    source: []
   }
+  filterTagPickerOpen = null
+  filterTagPickerQuery = ''
   const searchInput = document.getElementById('monster-search')
   if (searchInput) searchInput.value = ''
   renderMonsters(document.getElementById('content'))
@@ -5450,8 +5737,7 @@ function buildMonsterDetailCard(m) {
     return `<div style="margin-top:14px;">
       <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">${title}</div>
-      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;">
-        ${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${renderMarkdown(it.text||'')}</div>`).join('')}
+      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${renderMarkdown((it.text||'').trim())}</div>`).join('')}
     </div>`
   }
   const abs = [['STR','str'],['DEX','dex'],['CON','con'],['INT','int'],['WIS','wis'],['CHA','cha']]
@@ -5543,7 +5829,7 @@ function buildMonsterDetailCard(m) {
         return sline('Proficiency Bonus', `+${profBonus}`)
       })()}
       ${(m.tag && m.tag !== 'undefined' && m.tag !== '') ? sline('Tag', m.tag) : ''}
-      ${m.source ? sline('Source', m.source) : ''}
+      ${(m.source && m.source.length) ? sline('Source', m.source.join(', ')) : ''}
       ${absec('TRAITS', m.traits)}
       ${absec('ACTIONS', m.actions)}
       ${absec('BONUS ACTIONS', m.bonusActions)}
@@ -5662,7 +5948,13 @@ function buildMonsterDetailCard(m) {
         <div style="margin-top:14px;">
           <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                       margin-bottom:6px;">DESCRIPTION</div>
-          <div style="font-size:13px;color:#b8b0a0;line-height:1.6;">${m.description}</div>
+          <div style="font-size:13px;color:#b8b0a0;line-height:1.6;white-space:pre-wrap;">${m.description}</div>
+        </div>` : ''}
+      ${m.environments && m.environments.length > 0 ? `
+        <div style="margin-top:14px;">
+          <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
+                      margin-bottom:6px;">ENVIRONMENT</div>
+          <div style="font-size:13px;color:#b8b0a0;line-height:1.6;">${m.environments.join(', ')}</div>
         </div>` : ''}
     </div>`
 }
@@ -5697,8 +5989,7 @@ function buildNPCDetailCard(npc) {
     return `<div style="margin-top:14px;">
       <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">${title}</div>
-      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;">
-        ${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${renderMarkdown(it.text||'')}</div>`).join('')}
+      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${renderMarkdown((it.text||'').trim())}</div>`).join('')}
     </div>`
   }
   const abs = [['STR','str'],['DEX','dex'],['CON','con'],['INT','int'],['WIS','wis'],['CHA','cha']]
@@ -5724,6 +6015,11 @@ function buildNPCDetailCard(npc) {
         style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:6px 16px;
                cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
         &#9998; Edit
+      </button>
+      <button onclick="toggleNPCArchived('${npc.uid}')"
+        style="background:#3E3E3D;border:4px solid #2E2F2D;color:#e0d5c5;padding:6px 16px;
+               cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+        ${npc.archived ? 'Unarchive' : 'Archive'}
       </button>
       <button onclick="deleteNPC('${npc.uid}')"
         style="background:#8b0000;border:2px solid #5a0000;color:#e0d5c5;padding:6px 16px;
@@ -5848,7 +6144,7 @@ function buildNPCDetailCard(npc) {
         return sline('Proficiency Bonus', `+${profBonus}`)
       })()}
       ${npc.tag ? sline('Tag', npc.tag) : ''}
-      ${npc.source ? sline('Source', npc.source) : ''}
+      ${(npc.source && npc.source.length) ? sline('Source', Array.isArray(npc.source) ? npc.source.join(', ') : npc.source) : ''}
       ${absec('TRAITS', npc.traits)}
       ${absec('ACTIONS', npc.actions)}
       ${absec('BONUS ACTIONS', npc.bonusActions)}
@@ -5968,7 +6264,13 @@ function buildNPCDetailCard(npc) {
         <div style="margin-top:14px;">
           <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                       margin-bottom:6px;">DESCRIPTION</div>
-          <div style="font-size:13px;color:#b8b0a0;line-height:1.6;">${npc.description}</div>
+          <div style="font-size:13px;color:#b8b0a0;line-height:1.6;white-space:pre-wrap;">${npc.description}</div>
+        </div>` : ''}
+      ${npc.environments && npc.environments.length > 0 ? `
+        <div style="margin-top:14px;">
+          <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
+                      margin-bottom:6px;">ENVIRONMENT</div>
+          <div style="font-size:13px;color:#b8b0a0;line-height:1.6;">${npc.environments.join(', ')}</div>
         </div>` : ''}
       ${npc.text ? `
         <div style="margin-top:14px;">
@@ -6019,8 +6321,7 @@ function buildPCDetailCard(pc) {
     return `<div style="margin-top:14px;">
       <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">${title}</div>
-      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;">
-        ${it.name ? `<strong>${it.name}.</strong> ` : ''}${renderMarkdown(it.desc||it.text||'')}</div>`).join('')}
+      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${it.name ? `<strong>${it.name}.</strong> ` : ''}${renderMarkdown((it.desc||it.text||'').trim())}</div>`).join('')}
     </div>`
   }
   const abs = [['STR','str'],['DEX','dex'],['CON','con'],['INT','int'],['WIS','wis'],['CHA','cha']]
@@ -6411,7 +6712,8 @@ let spellFilters = {
   ritual: '',
   concentration: '',
   homebrew: '',
-  thirdParty: ''
+  thirdParty: '',
+  source: []
 }
 
 function renderSpells(container) {
@@ -6449,7 +6751,8 @@ function renderSpells(container) {
     font-family:var(--app-font);padding:6px 10px;border-radius:4px;font-size:12px;cursor:pointer;`
 
   const hasActiveFilters = spellFilters.query || spellFilters.level || spellFilters.school ||
-    spellFilters.ritual || spellFilters.concentration || spellFilters.homebrew || spellFilters.thirdParty
+    spellFilters.ritual || spellFilters.concentration || spellFilters.homebrew || spellFilters.thirdParty ||
+    spellFilters.source.length > 0
 
   container.innerHTML = `
     <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;">
@@ -6482,6 +6785,8 @@ function renderSpells(container) {
         ${uniqueSchools.map(school => `<option value="${school}" ${spellFilters.school === school ? 'selected' : ''}>${school}</option>`).join('')}
       </select>
 
+      <div id="filter-tagpicker-spell-source">${renderFilterTagPickerInner('spell-source')}</div>
+
       ${threeStateToggle('ritual', 'Ritual', 'spell')}
       ${threeStateToggle('concentration', 'Concentration', 'spell')}
       ${threeStateToggle('homebrew', 'Homebrew', 'spell')}
@@ -6494,6 +6799,8 @@ function renderSpells(container) {
         Clear Filters
       </button>
     </div>
+
+    <div id="spell-filter-chips">${renderActiveFilterChipsHtml('spell')}</div>
 
     <div id="spell-list"></div>
   `
@@ -6571,12 +6878,20 @@ function applySpellFilters() {
     filtered = filtered.filter(s => s.thirdParty !== true)
   }
 
+  // Source filter (OR across selected tags)
+  if (spellFilters.source.length > 0) {
+    filtered = filtered.filter(s => {
+      return spellFilters.source.some(sel =>
+        sel === 'No Source' ? (!s.source || !s.source.length) : (s.source || []).includes(sel))
+    })
+  }
+
   renderSpellList(filtered)
 
   // Update Clear Filters button state dynamically
   const clearBtn = document.getElementById('clear-spell-filters')
   if (clearBtn) {
-    const hasActive = spellFilters.query || spellFilters.level !== '' ||
+    const hasActive = spellFilters.query || spellFilters.level !== '' || spellFilters.source.length > 0 ||
       spellFilters.school || spellFilters.ritual || spellFilters.concentration || spellFilters.homebrew || spellFilters.thirdParty
     clearBtn.style.opacity = hasActive ? '1' : '0.4'
     clearBtn.style.pointerEvents = hasActive ? 'auto' : 'none'
@@ -6592,8 +6907,11 @@ function clearSpellFilters() {
     ritual: '',
     concentration: '',
     homebrew: '',
-    thirdParty: ''
+    thirdParty: '',
+    source: []
   }
+  filterTagPickerOpen = null
+  filterTagPickerQuery = ''
   const searchInput = document.getElementById('spell-search')
   if (searchInput) searchInput.value = ''
   renderSpells(document.getElementById('content'))
@@ -6692,7 +7010,7 @@ function showSpell(name, skipHistory = false) {
       <p style="line-height:1.7;white-space:pre-wrap;font-size:14px;">${s.text}</p>
       <hr style="border:none;border-top:1px solid #1A1C1E;margin:12px 0;">
       ${statRow('Classes/Subclasses', s.classes)}
-      ${s.source ? `<div style="font-size:12px;color:#666;margin-top:8px;"><span style="color:#888;font-weight:600;">Source:</span> ${s.source}</div>` : ''}
+      ${(s.source && s.source.length) ? `<div style="font-size:12px;color:#666;margin-top:8px;"><span style="color:#888;font-weight:600;">Source:</span> ${Array.isArray(s.source) ? s.source.join(', ') : s.source}</div>` : ''}
     </div>
   `
 }
@@ -6710,6 +7028,8 @@ function renderPlayers(container) {
     `
     return
   }
+  const activeNpcs = compendiumData.npcs.filter(n => !n.archived)
+  const archivedNpcs = compendiumData.npcs.filter(n => n.archived)
   container.innerHTML = `
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
       <input type="text" placeholder="Search characters…"
@@ -6737,7 +7057,7 @@ function renderPlayers(container) {
       ` : '<div id="player-grid" style="display:none;"></div>'}
     </div>
     <div style="background:#5C5C5C;border:4px solid #2E2F2D;border-radius:8px;padding:20px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${compendiumData.npcs.length > 0 ? '16px' : '0'};">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${activeNpcs.length > 0 ? '16px' : '0'};">
         <span style="font-size:16px;color:#1E231A;letter-spacing:.1em;font-weight:700;">
           NON-PLAYER CHARACTERS
         </span>
@@ -6748,15 +7068,28 @@ function renderPlayers(container) {
           + Create NPC
         </button>
       </div>
-      ${compendiumData.npcs.length > 0 ? `
+      ${activeNpcs.length > 0 ? `
         <div id="npc-grid"
           style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">
         </div>
       ` : '<div id="npc-grid" style="display:none;"></div>'}
     </div>
+    ${archivedNpcs.length > 0 ? `
+      <div style="background:#5C5C5C;border:4px solid #2E2F2D;border-radius:8px;padding:20px;margin-top:18px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+          <span style="font-size:16px;color:#1E231A;letter-spacing:.1em;font-weight:700;">
+            ARCHIVED NPCS
+          </span>
+        </div>
+        <div id="npc-archived-grid"
+          style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px;">
+        </div>
+      </div>
+    ` : ''}
   `
   renderPlayerGrid(compendiumData.players, 'player-grid')
-  renderPlayerGrid(compendiumData.npcs, 'npc-grid')
+  renderPlayerGrid(activeNpcs, 'npc-grid')
+  if (archivedNpcs.length > 0) renderPlayerGrid(archivedNpcs, 'npc-archived-grid')
 }
 
 function filterPlayers(query) {
@@ -6764,7 +7097,8 @@ function filterPlayers(query) {
   const match = p =>
     (p.label || '').toLowerCase().includes(q) || (p.name || '').toLowerCase().includes(q)
   renderPlayerGrid(compendiumData.players.filter(match), 'player-grid')
-  renderPlayerGrid(compendiumData.npcs.filter(match), 'npc-grid')
+  renderPlayerGrid(compendiumData.npcs.filter(n => !n.archived).filter(match), 'npc-grid')
+  renderPlayerGrid(compendiumData.npcs.filter(n => n.archived).filter(match), 'npc-archived-grid')
 }
 
 function renderPlayerGrid(players, gridId) {
@@ -6842,6 +7176,21 @@ function deletePC(uid) {
     saveCampaigns(compendiumData.campaigns)
     showSection('home')
   })
+}
+
+function toggleNPCArchived(uid) {
+  const campaign = compendiumData.activeCampaign
+  if (!campaign || !compendiumData.campaigns[campaign]) return
+
+  const npc = compendiumData.npcs.find(n => n.uid === uid)
+  if (!npc) return
+
+  npc.archived = !npc.archived
+  const campaignNpc = compendiumData.campaigns[campaign].npcs.find(n => n.uid === uid)
+  if (campaignNpc) campaignNpc.archived = npc.archived
+
+  saveCampaigns(compendiumData.campaigns)
+  showNPC(uid, true)
 }
 
 function deleteNPC(uid) {
@@ -7644,6 +7993,34 @@ function renderAdventuresSection() {
   `
 }
 
+// Splits a raw source string (possibly multiple comma-joined books) into clean,
+// trailing-page-reference-stripped segments. Shared by the one-time compendium
+// migration and by the Monster/Spell Builder manual "Source" input.
+function stripSourcePageRef(seg) {
+  return seg
+    .replace(/,?\s*(?:pg|pp|p)\.?\s*\d+(?:\s*-\s*\d+)?\s*$/i, '')
+    .replace(/,?\s*(?:pg|pp|p)\.?\s*$/i, '')
+    .trim()
+}
+function splitSourceString(raw) {
+  const str = String(raw || '').trim().replace(/\r?\n+/g, ', ')
+  if (!str) return []
+  // Commas can either separate multiple sourcebooks ("Book A p. 50, Book B") or be
+  // internal punctuation in a single title ("Flee, Mortals! p. 66"). Treat a comma as a
+  // real separator only when the text after it (once any page-ref suffix is stripped)
+  // still reads as its own multi-word title — a bare word/phrase like "Mortals!" gets
+  // rejoined onto the previous segment instead.
+  const merged = []
+  for (const part of str.split(',')) {
+    const trimmed = part.trim()
+    if (!trimmed) continue
+    const looksLikeNewSource = merged.length === 0 || /\s/.test(stripSourcePageRef(trimmed))
+    if (looksLikeNewSource) merged.push(trimmed)
+    else merged[merged.length - 1] += ', ' + trimmed
+  }
+  return merged.map(stripSourcePageRef).filter(Boolean)
+}
+
 // ── Auto-load ─────────────────────────────────────────────────────
 function autoLoad() {
   const savedCompendium = loadCompendium()
@@ -7790,8 +8167,43 @@ function autoLoad() {
         console.log(`[Monster Type Migration] Migrated ${monstersMigrated} monster(s) - extracted subtypes from type field into tag field`)
       }
 
+      // One-time migration: extract the "Source" trait (used by imported XML content that
+      // has no dedicated source field) into m.source, normalize any hand-authored source
+      // string into the same array shape, and remove the now-redundant trait.
+      let sourceMigratedCount = 0
+      for (const monster of compendiumData.monsters) {
+        const traits = Array.isArray(monster.traits) ? monster.traits : []
+        const sourceTraitIdx = traits.findIndex(t => (t.name||'').trim().toLowerCase() === 'source')
+
+        if (!Array.isArray(monster.source)) {
+          if (typeof monster.source === 'string' && monster.source.trim()) {
+            monster.source = splitSourceString(monster.source)
+          } else if (sourceTraitIdx !== -1) {
+            monster.source = splitSourceString(traits[sourceTraitIdx].text || '')
+          } else {
+            monster.source = []
+          }
+          sourceMigratedCount++
+        }
+
+        if (sourceTraitIdx !== -1) {
+          monster.traits = traits.filter((_, i) => i !== sourceTraitIdx)
+          sourceMigratedCount++
+        }
+      }
+      let spellSourceNormalized = 0
+      for (const spell of compendiumData.spells) {
+        if (!Array.isArray(spell.source)) {
+          spell.source = (typeof spell.source === 'string' && spell.source.trim()) ? splitSourceString(spell.source) : []
+          spellSourceNormalized++
+        }
+      }
+      if (sourceMigratedCount > 0) {
+        console.log(`[Source Migration] Normalized source data on ${sourceMigratedCount} monster(s)`)
+      }
+
       // Save if either cleanup or migration occurred
-      if (undefinedTagsCleaned > 0 || monstersMigrated > 0) {
+      if (undefinedTagsCleaned > 0 || monstersMigrated > 0 || sourceMigratedCount > 0 || spellSourceNormalized > 0) {
         saveCompendium({ monsters: compendiumData.monsters, spells: compendiumData.spells })
       }
     } catch (err) {
