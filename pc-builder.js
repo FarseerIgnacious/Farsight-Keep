@@ -204,6 +204,27 @@ function pcbDefaultDraft() {
   }
 }
 
+// Shared by pcbDraftFromPC's XML-import mapping for both traits and actions - derives
+// limitedUsage from structured charges/recharge fields, or falls back to parsing a
+// "(Recharge N)"/"(Recharge N-Y)" suffix out of the name (stripping it from the display
+// name once parsed), matching the equivalent fix in Monster/NPC Builder.
+function pcbParseFeatureEntry(entry) {
+  let lu = { type: 'none', count: 1 }
+  let name = entry.name || ''
+  if (entry.charges != null) {
+    lu = { type: 'per_day', count: entry.charges }
+  } else if (entry.recharge != null) {
+    lu = { type: `recharge_${entry.recharge}`, count: 1 }
+  } else {
+    const rechargeMatch = name.match(/\s*\(\s*recharge\s+(\d+)(?:\s*[-–—]\s*\d+)?\s*\)/i)
+    if (rechargeMatch) {
+      lu = { type: `recharge_${rechargeMatch[1]}`, count: 1 }
+      name = name.replace(rechargeMatch[0], '').replace(/\s{2,}/g, ' ').trim()
+    }
+  }
+  return { name, desc: entry.text || entry.desc || '', limitedUsage: lu }
+}
+
 function pcbDraftFromPC(pc) {
   const d = pcbDefaultDraft()
   if (pc._draft) {
@@ -340,9 +361,12 @@ function pcbDraftFromPC(pc) {
     immune: toTagList(pc.immune),
     conditionImmune: toTagList(pc.conditionImmune),
 
-    // Features
-    traits: Array.isArray(pc.traits) ? pc.traits.map(t => ({name: t.name, desc: t.text})) : [],
-    actions: Array.isArray(pc.actions) ? pc.actions.map(a => ({name: a.name, desc: a.text})) : [],
+    // Features - derive limitedUsage from structured charges/recharge fields, or (when those
+    // are empty) from a "(Recharge N)"/"(Recharge N-Y)" suffix baked into the name, matching
+    // the same fix applied to Monster/NPC Builder's equivalent XML-import parsing. Previously
+    // this dropped charges/recharge/limitedUsage entirely regardless of source data.
+    traits: Array.isArray(pc.traits) ? pc.traits.map(pcbParseFeatureEntry) : [],
+    actions: Array.isArray(pc.actions) ? pc.actions.map(pcbParseFeatureEntry) : [],
 
     // Spells
     selectedSpells: selectedSpells,

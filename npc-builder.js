@@ -40,32 +40,39 @@ function openNPCBuilder(uid = null) {
       function normalizeActions(actions) {
         if (!actions || !Array.isArray(actions)) return actions
         return actions.map(action => {
-          if (!action.attack) return action
+          const hasExistingAttack = !!action.attack
 
-          // Read attack bonus from NPC format (bonus:number) or Monster format (atk:string)
-          let atkBonus = action.attack.atk || (action.attack.bonus !== undefined ?
-            (action.attack.bonus >= 0 ? `+${action.attack.bonus}` : String(action.attack.bonus)) : '+0')
+          // Read attack bonus from NPC format (bonus:number) or Monster format (atk:string).
+          // When there's no pre-existing attack object at all, default to the em-dash
+          // sentinel ("damage only, no attack roll") used elsewhere in the app - a real
+          // to-hit bonus found via text-parsing below will override this if one exists.
+          let atkBonus = hasExistingAttack
+            ? (action.attack.atk || (action.attack.bonus !== undefined ?
+                (action.attack.bonus >= 0 ? `+${action.attack.bonus}` : String(action.attack.bonus)) : '+0'))
+            : '—'
 
-          // Parse damage string if it exists
           let attack = {
             atk: atkBonus,
-            diceCount: action.attack.diceCount || '',
-            dieType: action.attack.dieType || 'd6',
-            dmgBonus: action.attack.dmgBonus || '',
-            dmgType: action.attack.dmgType || '',
-            additionalDiceCount: action.attack.additionalDiceCount || '',
-            additionalDieType: action.attack.additionalDieType || '',
-            additionalDmgType: action.attack.additionalDmgType || '',
-            showAdditional: action.attack.showAdditional || false,
-            altDiceCount: action.attack.altDiceCount || '',
-            altDieType: action.attack.altDieType || '',
-            altDmgBonus: action.attack.altDmgBonus || '',
-            altDmgType: action.attack.altDmgType || '',
-            showAlternate: action.attack.showAlternate || false
+            diceCount: (hasExistingAttack && action.attack.diceCount) || '',
+            // Left empty (not defaulted to 'd6') so the text-parsing fallback below still
+            // gets a chance to fill in the real die type - a truthy placeholder here would
+            // make the "!attack.dieType" check further down always skip it.
+            dieType: (hasExistingAttack && action.attack.dieType) || '',
+            dmgBonus: (hasExistingAttack && action.attack.dmgBonus) || '',
+            dmgType: (hasExistingAttack && action.attack.dmgType) || '',
+            additionalDiceCount: (hasExistingAttack && action.attack.additionalDiceCount) || '',
+            additionalDieType: (hasExistingAttack && action.attack.additionalDieType) || '',
+            additionalDmgType: (hasExistingAttack && action.attack.additionalDmgType) || '',
+            showAdditional: (hasExistingAttack && action.attack.showAdditional) || false,
+            altDiceCount: (hasExistingAttack && action.attack.altDiceCount) || '',
+            altDieType: (hasExistingAttack && action.attack.altDieType) || '',
+            altDmgBonus: (hasExistingAttack && action.attack.altDmgBonus) || '',
+            altDmgType: (hasExistingAttack && action.attack.altDmgType) || '',
+            showAlternate: (hasExistingAttack && action.attack.showAlternate) || false
           }
 
           // If dmg string exists, parse it to populate structured fields
-          if (action.attack.dmg && window.parseDamageString) {
+          if (hasExistingAttack && action.attack.dmg && window.parseDamageString) {
             const parsed = window.parseDamageString(action.attack.dmg)
             attack.diceCount = parsed.diceCount
             attack.dieType = parsed.dieType
@@ -77,8 +84,9 @@ function openNPCBuilder(uid = null) {
             attack.showAdditional = (parsed.additionalDiceCount || '') !== ''
           }
 
-          // Parse from description text - always run if desc is available
-          // Description text is the most reliable source for attack bonus
+          // Parse from description text - always run if desc is available, whether refining
+          // an existing attack or reconstructing one that was never structured in the source
+          // (e.g. a save-based breath weapon whose XML never had an <attack> element at all)
           const textParsed = window.parseAttackFromText && action.desc
             ? window.parseAttackFromText(action.desc)
             : null
@@ -120,6 +128,15 @@ function openNPCBuilder(uid = null) {
               }
             }
           }
+
+          // Only attach an attack object if one already existed, or text-parsing actually
+          // found something - don't fabricate an empty attack (with Roll Attack/Damage
+          // buttons) for actions that never had any attack data, like Multiattack or a
+          // purely descriptive trait
+          if (!hasExistingAttack && !textParsed) return action
+
+          // Fall back to d6 only now, after text-parsing had its chance to supply the real die type
+          if (!attack.dieType) attack.dieType = 'd6'
 
           // Return with ALL original fields preserved, only attack field overridden
           return {
@@ -375,12 +392,26 @@ function npcbDraftFromNPC(npc) {
     function parseEntries(arr, hasAttack) {
       return (arr || []).map(entry => {
         let lu = { type: 'none', count: 1 }
-        if (entry.charges != null) lu = { type: 'per_day', count: entry.charges }
-        else if (entry.recharge != null) lu = { type: `recharge_${entry.recharge}`, count: 1 }
+        let name = entry.name || ''
+        if (entry.charges != null) {
+          lu = { type: 'per_day', count: entry.charges }
+        } else if (entry.recharge != null) {
+          lu = { type: `recharge_${entry.recharge}`, count: 1 }
+        } else {
+          // Structured recharge field is empty - XML-imported monsters often bake this into
+          // the action name instead, e.g. "Cold Breath (Recharge 6)" or "Acid Breath (Recharge 5-6)".
+          // Extract the lower bound of the range as the recharge threshold, and strip the
+          // suffix so it doesn't display redundantly once limitedUsage shows it separately.
+          const rechargeMatch = name.match(/\s*\(\s*recharge\s+(\d+)(?:\s*[-–—]\s*\d+)?\s*\)/i)
+          if (rechargeMatch) {
+            lu = { type: `recharge_${rechargeMatch[1]}`, count: 1 }
+            name = name.replace(rechargeMatch[0], '').replace(/\s{2,}/g, ' ').trim()
+          }
+        }
         const atk = (hasAttack && entry.attack) ? { bonus: parseInt(entry.attack.atk) || 0, dmg: entry.attack.dmg || '' } : null
         return {
           id: 'mbe_' + Math.random().toString(36).slice(2),
-          name: entry.name || '',
+          name: name,
           desc: entry.text || entry.desc || '', // Support both compendium (text) and draft (desc) formats
           limitedUsage: lu,
           attack: atk
@@ -596,12 +627,26 @@ function npcbDraftFromMonster(monster) {
     function parseEntries(arr, hasAttack) {
       return (arr || []).map(entry => {
         let lu = { type: 'none', count: 1 }
-        if (entry.charges != null) lu = { type: 'per_day', count: entry.charges }
-        else if (entry.recharge != null) lu = { type: `recharge_${entry.recharge}`, count: 1 }
+        let name = entry.name || ''
+        if (entry.charges != null) {
+          lu = { type: 'per_day', count: entry.charges }
+        } else if (entry.recharge != null) {
+          lu = { type: `recharge_${entry.recharge}`, count: 1 }
+        } else {
+          // Structured recharge field is empty - XML-imported monsters often bake this into
+          // the action name instead, e.g. "Cold Breath (Recharge 6)" or "Acid Breath (Recharge 5-6)".
+          // Extract the lower bound of the range as the recharge threshold, and strip the
+          // suffix so it doesn't display redundantly once limitedUsage shows it separately.
+          const rechargeMatch = name.match(/\s*\(\s*recharge\s+(\d+)(?:\s*[-–—]\s*\d+)?\s*\)/i)
+          if (rechargeMatch) {
+            lu = { type: `recharge_${rechargeMatch[1]}`, count: 1 }
+            name = name.replace(rechargeMatch[0], '').replace(/\s{2,}/g, ' ').trim()
+          }
+        }
         const atk = (hasAttack && entry.attack) ? { bonus: parseInt(entry.attack.atk) || 0, dmg: entry.attack.dmg || '' } : null
         return {
           id: 'mbe_' + Math.random().toString(36).slice(2),
-          name: entry.name || '',
+          name: name,
           desc: entry.text || entry.desc || '', // Support both compendium (text) and draft (desc) formats
           limitedUsage: lu,
           attack: atk

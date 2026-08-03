@@ -313,8 +313,22 @@ function mbFromCompendium(m) {
   function parseEntries(arr, hasAttack) {
     return (arr||[]).map(t => {
       let lu = {type:'none', count:1}
-      if (t.charges != null) lu = {type:'per_day', count:t.charges}
-      else if (t.recharge != null) lu = {type:`recharge_${t.recharge}`, count:1}
+      let name = t.name || ''
+      if (t.charges != null) {
+        lu = {type:'per_day', count:t.charges}
+      } else if (t.recharge != null) {
+        lu = {type:`recharge_${t.recharge}`, count:1}
+      } else {
+        // Structured recharge field is empty - XML-imported monsters often bake this into
+        // the action name instead, e.g. "Cold Breath (Recharge 6)" or "Acid Breath (Recharge 5-6)".
+        // Extract the lower bound of the range as the recharge threshold, and strip the
+        // suffix so it doesn't display redundantly once limitedUsage shows it separately.
+        const rechargeMatch = name.match(/\s*\(\s*recharge\s+(\d+)(?:\s*[-–—]\s*\d+)?\s*\)/i)
+        if (rechargeMatch) {
+          lu = {type:`recharge_${rechargeMatch[1]}`, count:1}
+          name = name.replace(rechargeMatch[0], '').replace(/\s{2,}/g, ' ').trim()
+        }
+      }
 
       // Parse attack data - convert legacy XML format to structured format
       // Handle both Monster Builder format (text/atk) and NPC Builder format (desc/bonus)
@@ -481,7 +495,7 @@ function mbFromCompendium(m) {
       // Normalize output - use 'desc' field consistently (handles both t.text and t.desc input)
       return {
         id: t.id || 'mbe_'+Math.random().toString(36).slice(2),
-        name: t.name||'',
+        name: name,
         desc: t.desc || t.text || '',
         limitedUsage: lu,
         attack: atk
@@ -2860,9 +2874,10 @@ function mbSave() {
       return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null }
     })
 
+    const combatantName = nextMonsterCombatantName(entry.name)
     enc.current.combatants.push({
       uid: makeCombatantUid(),
-      name: entry.name,
+      name: combatantName,
       type: 'Monster',
       isPC: false,
       isEnemy: true,
@@ -2913,7 +2928,7 @@ function mbSave() {
       fullMonsterData: entry
     })
 
-    showToast(`${entry.name} added to encounter — initiative: ${initRoll}`)
+    showToast(`${combatantName} added to encounter — initiative: ${initRoll}`)
 
     // Clean up and return to encounter
     mb.encounterOnlyMode = false

@@ -693,6 +693,39 @@ function parseUsesFromName(name) {
   return { charges: null, recharge: null }
 }
 
+// Shared by every combatant-creation trait/action mapper (addFromPC/addFromNPC/addMonsterAsIs) -
+// recovers attack/damage data from the ability's free-text description when the source item's
+// structured attack field is missing entirely. NPC Builder's openNPCBuilder() already runs this
+// same parseAttackFromText() recovery when a monster/NPC is opened in a builder and re-saved,
+// but a monster or NPC added straight to an encounter never passes through a builder, so without
+// this a description-only ability (no structured attack) would silently get no Roll Attack/Roll
+// Damage buttons on the combatant card.
+function recoverAttackData(item) {
+  const hasExistingAttack = !!(item.attack && (item.attack.atk || item.attack.diceCount))
+  if (hasExistingAttack) return item.attack
+
+  const text = item.text || item.desc || ''
+  const parsed = text ? parseAttackFromText(text) : null
+  if (!parsed) return item.attack || null
+
+  return {
+    atk: parsed.atk || '—',
+    diceCount: parsed.diceCount || '',
+    dieType: parsed.dieType || 'd6',
+    dmgBonus: parsed.dmgBonus || '',
+    dmgType: parsed.dmgType || '',
+    additionalDiceCount: '',
+    additionalDieType: '',
+    additionalDmgType: '',
+    showAdditional: false,
+    altDiceCount: parsed.altDiceCount || '',
+    altDieType: parsed.altDieType || '',
+    altDmgBonus: parsed.altDmgBonus || '',
+    altDmgType: parsed.altDmgType || '',
+    showAlternate: !!parsed.altDiceCount
+  }
+}
+
 function abilityMod(score) {
   const num = parseInt(score)
   return isNaN(num) ? 0 : Math.floor((num - 10) / 2)
@@ -2926,8 +2959,9 @@ function runEncounter(id) {
         if (savedState.spells) c.spells = savedState.spells
         if (savedState.traits) c.traits = savedState.traits
         if (savedState.actions) c.actions = savedState.actions
+        if (savedState.bonusActions) c.bonusActions = savedState.bonusActions
         if (savedState.reactions) c.reactions = savedState.reactions
-        if (savedState.legendaries) c.legendaries = savedState.legendaries
+        if (savedState.legendaryActions) c.legendaryActions = savedState.legendaryActions
         if (savedState.lairs) c.lairs = savedState.lairs
       }
     })
@@ -2972,7 +3006,9 @@ function enterEncounterBuilder() {
   content.style.overflowY = 'hidden'
   renderEncounterBuilder(content)
 
-  // Set sidebar height after render to account for header
+  // Set sidebar height after render to account for header. This is intentionally
+  // independent of the right panel (#enc-center), which fills its remaining space via
+  // its own flex layout instead - the two panels are not meant to match each other.
   setTimeout(() => {
     const topbar = document.getElementById('enc-topbar')
     const sidebar = document.getElementById('enc-left')
@@ -2986,7 +3022,8 @@ function enterEncounterBuilder() {
 // ── Encounter Builder ─────────────────────────────────────────────
 function renderEncounterBuilder(container) {
   container.innerHTML = `
-    <div style="min-height:100%;background:linear-gradient(#5C5C5C 40px, transparent 40px),
+    <div style="height:100%;display:flex;flex-direction:column;
+                background:linear-gradient(#5C5C5C 40px, transparent 40px),
                 linear-gradient(rgba(0,0,0,0.45), rgba(0,0,0,0.45)),
                 url('assets/Background.png') left -40px/1641px auto no-repeat fixed;">
       <div id="enc-topbar"
@@ -3037,7 +3074,7 @@ function renderEncounterBuilder(container) {
         </button>
       </div>
 
-      <div style="display:flex;position:relative;flex:1;">
+      <div style="display:flex;position:relative;flex:1;min-height:0;">
 
         <div id="enc-left"
           style="width:210px;flex-shrink:0;overflow-y:auto;overflow-x:hidden;
@@ -3050,8 +3087,8 @@ function renderEncounterBuilder(container) {
         </div>
 
         <div id="enc-center"
-          style="flex:1;overflow-x:auto;overflow-y:hidden;display:flex;
-                 align-items:flex-start;gap:12px;padding:16px;position:relative;z-index:1;">
+          style="flex:1;min-height:0;overflow-x:auto;overflow-y:hidden;display:flex;
+                 gap:12px;padding:16px;position:relative;z-index:1;">
         </div>
 
         <div id="enc-overlay" onclick="closeEncPanels()"
@@ -3340,6 +3377,70 @@ function buildCard(c, isActive) {
           const rechargeText = (recharge !== null && recharge !== undefined && recharge !== '' && charges === null)
             ? `(Recharge ${recharge}${recharge === 6 ? '' : `-6`})`
             : ''
+          // Many monster/NPC source names already bake "(Recharge N)" into the name itself
+          // (e.g. "Cold Breath (Recharge 6)") - only show the separate subtitle line when the
+          // name doesn't already say it, to avoid showing the same text twice on one entry.
+          const nameAlreadyShowsRecharge = /\(\s*recharge\s+\d+(?:\s*[-–—]\s*\d+)?\s*\)/i.test(displayName)
+          const showRechargeSubtitle = rechargeText && !nameAlreadyShowsRecharge
+
+          const attackButtonsHTML = (item.attack && item.attack.atk) ? `
+            <div style="display:flex;align-items:center;gap:3px;flex-shrink:0;position:relative;">
+              ${item.attack.atk !== '—' ? `
+                <button onclick="rollAttack('${c.uid}','${(item.name || '').replace(/'/g, "\\'")}',${JSON.stringify(item.attack || {}).replace(/"/g, '&quot;')})"
+                  style="background:#0f3460;border:none;color:#e0d5c5;padding:3px 8px;
+                         cursor:pointer;border-radius:3px;font-size:11px;line-height:1.3;
+                         white-space:nowrap;"
+                  title="Roll attack">Roll Attack</button>
+              ` : ''}
+              <button id="dmg-btn-${c.uid}-${idx}" onclick="${item.attack.altDiceCount ?
+                `showDamagePopup('${c.uid}','${(item.name || '').replace(/'/g, "\\'")}',${JSON.stringify(item.attack || {}).replace(/"/g, '&quot;')},this)` :
+                `rollDamage('${c.uid}','${(item.name || '').replace(/'/g, "\\'")}',${JSON.stringify(item.attack || {}).replace(/"/g, '&quot;')},'standard')`}"
+                style="background:#0f3460;border:none;color:#e0d5c5;padding:3px 8px;
+                       cursor:pointer;border-radius:3px;font-size:11px;line-height:1.3;
+                       white-space:nowrap;"
+                title="Roll damage">Roll Damage</button>
+            </div>
+          ` : ''
+
+          const chargesControlsHTML = charges !== null ? `
+            <div style="display:flex;align-items:center;gap:3px;flex-shrink:0;">
+              <button onclick="adjustCharge('${c.uid}','${section}',${idx},-1)"
+                style="background:#0f3460;border:none;color:#e0d5c5;width:22px;height:22px;
+                       cursor:pointer;border-radius:3px;font-size:14px;line-height:1;
+                       padding:0;display:flex;align-items:center;justify-content:center;">-</button>
+              <span style="font-size:12px;color:#aaa;min-width:36px;text-align:center;">
+                ${chargesCurrent}/${charges}</span>
+              <button onclick="adjustCharge('${c.uid}','${section}',${idx},1)"
+                style="background:#0f3460;border:none;color:#e0d5c5;width:22px;height:22px;
+                       cursor:pointer;border-radius:3px;font-size:14px;line-height:1;
+                       padding:0;display:flex;align-items:center;justify-content:center;">+</button>
+            </div>
+          ` : ''
+
+          const rechargeControlsHTML = rechargeText ? (() => {
+            const available = item.rechargeAvailable !== false
+            return `
+            <div style="display:flex;align-items:center;gap:5px;flex-shrink:0;">
+              <button onclick="${available ? `useRechargeAbility('${c.uid}','${section}',${idx})` : ''}"
+                title="${available ? 'Click to mark used' : 'Exhausted - roll to recharge'}"
+                style="display:flex;align-items:center;gap:5px;background:transparent;
+                       border:1px solid ${available ? '#3a9a4a' : '#7a3535'};
+                       color:${available ? '#5fd576' : '#c07070'};padding:3px 8px;border-radius:3px;
+                       font-size:11px;line-height:1.3;white-space:nowrap;
+                       cursor:${available ? 'pointer' : 'default'};">
+                <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;
+                             background:${available ? '#5fd576' : '#c04040'};display:inline-block;"></span>
+                ${available ? 'Ready' : 'Exhausted'}
+              </button>
+              ${!available ? `
+                <button onclick="rollRecharge('${c.uid}','${section}',${idx})"
+                  style="background:#0f3d2e;border:none;color:#7fffa0;padding:3px 8px;
+                         cursor:pointer;border-radius:3px;font-size:11px;line-height:1.3;
+                         white-space:nowrap;"
+                  title="Roll to recharge (needs ${recharge}+)">Recharge</button>
+              ` : ''}
+            </div>`
+          })() : ''
 
           return `
           <div style="margin-bottom:8px;">
@@ -3353,41 +3454,12 @@ function buildCard(c, isActive) {
                   ${long ? `<span id="${tid}-arrow"
                     style="font-size:11px;color:#555;flex-shrink:0;">▼</span>` : ''}
                 </div>
-                ${rechargeText ? `<div style="font-size:12px;color:#b8b0a0;">${rechargeText}</div>` : ''}
+                ${showRechargeSubtitle ? `<div style="font-size:12px;color:#b8b0a0;">${rechargeText}</div>` : ''}
               </div>
-              ${item.attack && item.attack.atk ? `
-                <div style="display:flex;align-items:center;gap:3px;flex-shrink:0;position:relative;">
-                  ${item.attack.atk !== '—' ? `
-                    <button onclick="rollAttack('${c.uid}','${(item.name || '').replace(/'/g, "\\'")}',${JSON.stringify(item.attack || {}).replace(/"/g, '&quot;')})"
-                      style="background:#0f3460;border:none;color:#e0d5c5;padding:3px 8px;
-                             cursor:pointer;border-radius:3px;font-size:11px;line-height:1.3;
-                             white-space:nowrap;"
-                      title="Roll attack">Roll Attack</button>
-                  ` : ''}
-                  <button id="dmg-btn-${c.uid}-${idx}" onclick="${item.attack.altDiceCount ?
-                    `showDamagePopup('${c.uid}','${(item.name || '').replace(/'/g, "\\'")}',${JSON.stringify(item.attack || {}).replace(/"/g, '&quot;')},this)` :
-                    `rollDamage('${c.uid}','${(item.name || '').replace(/'/g, "\\'")}',${JSON.stringify(item.attack || {}).replace(/"/g, '&quot;')},'standard')`}"
-                    style="background:#0f3460;border:none;color:#e0d5c5;padding:3px 8px;
-                           cursor:pointer;border-radius:3px;font-size:11px;line-height:1.3;
-                           white-space:nowrap;"
-                    title="Roll damage">Roll Damage</button>
-                </div>
-              ` : ''}
-              ${charges !== null ? `
-                <div style="display:flex;align-items:center;gap:3px;flex-shrink:0;">
-                  <button onclick="adjustCharge('${c.uid}','${section}',${idx},-1)"
-                    style="background:#0f3460;border:none;color:#e0d5c5;width:22px;height:22px;
-                           cursor:pointer;border-radius:3px;font-size:14px;line-height:1;
-                           padding:0;display:flex;align-items:center;justify-content:center;">-</button>
-                  <span style="font-size:12px;color:#aaa;min-width:36px;text-align:center;">
-                    ${chargesCurrent}/${charges}</span>
-                  <button onclick="adjustCharge('${c.uid}','${section}',${idx},1)"
-                    style="background:#0f3460;border:none;color:#e0d5c5;width:22px;height:22px;
-                           cursor:pointer;border-radius:3px;font-size:14px;line-height:1;
-                           padding:0;display:flex;align-items:center;justify-content:center;">+</button>
-                </div>
-              ` : ''}
+              ${attackButtonsHTML}
+              ${chargesControlsHTML}
             </div>
+            ${rechargeControlsHTML ? `<div style="margin-top:5px;">${rechargeControlsHTML}</div>` : ''}
             <div id="${tid}"
               style="color:#b8b0a0;font-size:13px;line-height:1.5;margin-top:1px;white-space:pre-wrap;
                      ${long ? 'overflow:hidden;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;' : ''}">${renderMarkdown(text.trim())}</div>
@@ -3579,7 +3651,7 @@ function buildCard(c, isActive) {
       style="min-width:420px;max-width:420px;background:#262F35;flex-shrink:0;
              border:${isActive ? '6px' : '2px'} solid ${isActive ? '#4587A2' : '#1e2d4a'};border-radius:6px;
              padding:16px;align-self:flex-start;position:relative;
-             max-height:calc(100vh - 220px);overflow-y:auto;overflow-x:visible;padding-bottom:80px;
+             max-height:100%;overflow-y:auto;overflow-x:visible;padding-bottom:80px;
              scrollbar-width:none;-ms-overflow-style:none;">
       <style>
         #card-${c.uid}::-webkit-scrollbar { display: none; }
@@ -3964,9 +4036,9 @@ function buildCard(c, isActive) {
 
       ${abilityBlock('TRAITS', c.traits, 'traits')}
       ${abilityBlock('ACTIONS', c.actions, 'actions')}
-      ${abilityBlock('BONUS ACTIONS', c.bonusActions, 'bonus')}
+      ${abilityBlock('BONUS ACTIONS', c.bonusActions, 'bonusActions')}
       ${abilityBlock('REACTIONS', c.reactions, 'reactions')}
-      ${abilityBlock('LEGENDARY ACTIONS', c.legendaryActions, 'legendary')}
+      ${abilityBlock('LEGENDARY ACTIONS', c.legendaryActions, 'legendaryActions')}
       ${abilityBlock('LAIR ACTIONS', c.lairs, 'lairs')}
       ${slotsHTML}
       ${dailySpellsHTML}
@@ -4261,6 +4333,55 @@ function makeCombatantUid() {
   return 'c_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5)
 }
 
+function intToRoman(num) {
+  const table = [
+    [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'],
+    [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'],
+    [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']
+  ]
+  let result = ''
+  for (const [value, numeral] of table) {
+    while (num >= value) {
+      result += numeral
+      num -= value
+    }
+  }
+  return result
+}
+
+function romanToInt(str) {
+  const values = { I: 1, V: 5, X: 10, L: 50, C: 100, D: 500, M: 1000 }
+  let result = 0
+  for (let i = 0; i < str.length; i++) {
+    const cur = values[str[i]]
+    const next = values[str[i + 1]]
+    result += (next && cur < next) ? -cur : cur
+  }
+  return result
+}
+
+// Assigns a Roman-numeral instance suffix for a monster combatant sharing the same base
+// name as others already in the encounter (e.g. "Kenku [2024]", "Kenku [2024] II", ...).
+// The first instance of a name is left unchanged. Numbers are computed fresh from whatever
+// is currently in the encounter (highest existing suffix + 1) rather than a running count,
+// so removing one mid-encounter never causes a later addition to collide with or renumber
+// an existing label - only unmodified plain "adds" ever consult this function, and removal
+// never touches other combatants' names.
+function nextMonsterCombatantName(baseName) {
+  if (!enc.current || !Array.isArray(enc.current.combatants)) return baseName
+  const escaped = baseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const pattern = new RegExp(`^${escaped}(?: ([IVXLCDM]+))?$`)
+  let maxExisting = 0
+  for (const c of enc.current.combatants) {
+    const match = c.name && c.name.match(pattern)
+    if (!match) continue
+    const num = match[1] ? romanToInt(match[1]) : 1
+    if (num > maxExisting) maxExisting = num
+  }
+  const nextNum = maxExisting + 1
+  return nextNum === 1 ? baseName : `${baseName} ${intToRoman(nextNum)}`
+}
+
 function addFromPC(uid) {
   const pc = compendiumData.players.find(p => p.uid === uid)
   if (!pc) return
@@ -4345,7 +4466,7 @@ function addFromPC(uid) {
 
     // Normalize field name: PC traits may have .desc (PC builder) or .text (XML import)
     // Combatant card renderer expects .text
-    return { ...t, text: t.text || t.desc || '', charges, recharge, chargesCurrent }
+    return { ...t, text: t.text || t.desc || '', charges, recharge, chargesCurrent, rechargeAvailable: true, attack: recoverAttackData(t) }
   })
 
   enc.current.combatants.push({
@@ -4404,7 +4525,7 @@ function addFromPC(uid) {
         chargesCurrent = chargesCurrent ?? charges
       }
 
-      return { name: a.name, text: a.text, charges, chargesCurrent, recharge }
+      return { name: a.name, text: a.text, charges, chargesCurrent, recharge, rechargeAvailable: true, attack: recoverAttackData(a) }
     }),
     spellSlots,
     dailySpells: parseDailySpells(pcTraits),
@@ -4443,7 +4564,7 @@ function addFromNPC(uid) {
     const inferred = (t.charges === null && t.recharge === null) ? parseUsesFromName(t.name) : {}
     const charges = t.charges !== null ? t.charges : (inferred.charges ?? null)
     const recharge = t.recharge !== null ? t.recharge : (inferred.recharge ?? null)
-    return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+    return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(t) }
   })
   const initRoll = Math.floor(Math.random() * 20) + 1
   const abilities = Array.isArray(npc.abilities) ? npc.abilities : [10,10,10,10,10,10]
@@ -4505,7 +4626,9 @@ function addFromNPC(uid) {
         ...a,
         charges,
         recharge,
-        chargesCurrent: charges !== null ? charges : null
+        chargesCurrent: charges !== null ? charges : null,
+        rechargeAvailable: true,
+        attack: recoverAttackData(a)
       }
     }),
     spellSlots,
@@ -4586,7 +4709,7 @@ function addMonsterAsIs(name) {
     const inferred = (t.charges === null && t.recharge === null) ? parseUsesFromName(t.name) : {}
     const charges = t.charges !== null ? t.charges : (inferred.charges ?? null)
     const recharge = t.recharge !== null ? t.recharge : (inferred.recharge ?? null)
-    return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+    return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(t) }
   })
   // Build abilities array for consistency with PCs/NPCs
   const abilities = [
@@ -4631,9 +4754,10 @@ function addMonsterAsIs(name) {
     return enriched
   })
 
+  const combatantName = nextMonsterCombatantName(m.name)
   enc.current.combatants.push({
     uid: makeCombatantUid(),
-    name: m.name,
+    name: combatantName,
     type: m.type || 'Humanoid',
     size: m.size || '',
     isPC: false,
@@ -4659,31 +4783,31 @@ function addMonsterAsIs(name) {
       const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
       const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
       const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
     }),
     bonusActions: (m.bonusActions || []).map(a => {
       const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
       const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
       const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
     }),
     reactions: (m.reactions || []).map(a => {
       const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
       const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
       const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
     }),
     legendaryActions: (m.legendaryActions || []).map(a => {
       const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
       const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
       const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
     }),
     lairs: (m.lairActions || []).map(a => {
       const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
       const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
       const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
+      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
     }),
     spellSlots,
     dailySpells: parseDailySpells(traits),
@@ -4699,7 +4823,7 @@ function addMonsterAsIs(name) {
     vulnerable: m.vulnerable || '',
     conditionImmune: m.conditionImmune || '',
   })
-  showToast(`${m.name} added — initiative: ${initRoll}`)
+  showToast(`${combatantName} added — initiative: ${initRoll}`)
   refreshInitSidebar()
   refreshCards()
 }
@@ -4873,6 +4997,51 @@ function adjustCharge(uid, section, index, delta) {
   if (item.charges !== null) {
     item.chargesCurrent = Math.max(0, Math.min(item.charges, (item.chargesCurrent || 0) + delta))
   }
+  refreshCards()
+}
+
+function useRechargeAbility(uid, section, index) {
+  const c = enc.current?.combatants.find(x => x.uid === uid)
+  if (!c) return
+  const items = c[section]
+  if (!items || !items[index]) return
+  items[index].rechargeAvailable = false
+  refreshCards()
+}
+
+function rollRecharge(uid, section, index) {
+  const c = enc.current?.combatants.find(x => x.uid === uid)
+  if (!c) return
+  const items = c[section]
+  if (!items || !items[index]) return
+  const item = items[index]
+
+  let threshold = item.recharge
+  if (threshold === null || threshold === undefined) {
+    if (item.limitedUsage?.type === 'recharge_5_6') threshold = 5
+    else if (item.limitedUsage?.type === 'recharge_6') threshold = 6
+    else if (item.limitedUsage?.type?.startsWith('recharge_')) {
+      const match = item.limitedUsage.type.match(/recharge_(\d+)/)
+      if (match) threshold = parseInt(match[1])
+    }
+  }
+  if (threshold === null || threshold === undefined) return
+
+  const roll = Math.floor(Math.random() * 6) + 1
+  const success = roll >= threshold
+  if (success) item.rechargeAvailable = true
+
+  const now = new Date()
+  const timestamp = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  diceState.history.push({
+    timestamp,
+    dice: `${c.name} Recharge - ${item.name}:`,
+    breakdown: success ? `d6(${roll}) ≥ ${threshold} — Recharged!` : `d6(${roll}) < ${threshold} — still exhausted`,
+    total: roll
+  })
+
+  showDiceResult(roll, success ? `Recharged! (needed ${threshold}+)` : `Not recharged (needed ${threshold}+)`)
+  renderDiceRoller()
   refreshCards()
 }
 
@@ -5061,8 +5230,9 @@ function saveEncounterPrompt() {
         spells: c.spells ? JSON.parse(JSON.stringify(c.spells)) : null,
         traits: c.traits ? JSON.parse(JSON.stringify(c.traits)) : null,
         actions: c.actions ? JSON.parse(JSON.stringify(c.actions)) : null,
+        bonusActions: c.bonusActions ? JSON.parse(JSON.stringify(c.bonusActions)) : null,
         reactions: c.reactions ? JSON.parse(JSON.stringify(c.reactions)) : null,
-        legendaries: c.legendaries ? JSON.parse(JSON.stringify(c.legendaries)) : null,
+        legendaryActions: c.legendaryActions ? JSON.parse(JSON.stringify(c.legendaryActions)) : null,
         lairs: c.lairs ? JSON.parse(JSON.stringify(c.lairs)) : null
       }))
     }
@@ -5801,6 +5971,29 @@ function showMonster(name, skipHistory = false) {
   content.scrollTop = 0
 }
 
+// Shared by the Monster/NPC/PC stat block detail cards' absec() ability renderers -
+// derives a static (non-interactive) usage indicator string to show next to an
+// ability's name, mirroring the same charges/recharge fallback logic used on the
+// combatant card's abilityBlock, but with no Ready/Exhausted state or roll buttons
+// since stat blocks are read-only.
+function statBlockUsageStr(item) {
+  if (!item) return ''
+  const charges = item.charges ?? (item.limitedUsage?.type === 'per_day' || item.limitedUsage?.type === 'charges' ? item.limitedUsage.count : null)
+  if (charges !== null && charges !== undefined) return ` (${charges}/${charges} uses)`
+
+  let recharge = item.recharge
+  if (recharge === null || recharge === undefined) {
+    if (item.limitedUsage?.type?.startsWith('recharge_')) {
+      const match = item.limitedUsage.type.match(/recharge_(\d+)/)
+      if (match) recharge = parseInt(match[1])
+    }
+  }
+  if (recharge !== null && recharge !== undefined && recharge !== '') {
+    return mbLimitedStr({ type: `recharge_${recharge}` })
+  }
+  return ''
+}
+
 function buildMonsterDetailCard(m) {
   function mod(s) { const n = Math.floor(((parseInt(s)||10)-10)/2); return n>=0?`+${n}`:String(n) }
   function sline(label, val) {
@@ -5818,7 +6011,7 @@ function buildMonsterDetailCard(m) {
     return `<div style="margin-top:14px;">
       <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">${title}</div>
-      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${renderMarkdown((it.text||'').trim())}</div>`).join('')}
+      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}${statBlockUsageStr(it)}.</strong> ` : ''}${renderMarkdown((it.text||'').trim())}</div>`).join('')}
     </div>`
   }
   const abs = [['STR','str'],['DEX','dex'],['CON','con'],['INT','int'],['WIS','wis'],['CHA','cha']]
@@ -6070,7 +6263,7 @@ function buildNPCDetailCard(npc) {
     return `<div style="margin-top:14px;">
       <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">${title}</div>
-      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}.</strong> ` : ''}${renderMarkdown((it.text||'').trim())}</div>`).join('')}
+      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${it.name ? `<strong style="font-size:14.5px;color:#7B9BA8;">${it.name}${statBlockUsageStr(it)}.</strong> ` : ''}${renderMarkdown((it.text||'').trim())}</div>`).join('')}
     </div>`
   }
   const abs = [['STR','str'],['DEX','dex'],['CON','con'],['INT','int'],['WIS','wis'],['CHA','cha']]
@@ -6402,7 +6595,7 @@ function buildPCDetailCard(pc) {
     return `<div style="margin-top:14px;">
       <div style="font-size:15px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">${title}</div>
-      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${it.name ? `<strong>${it.name}.</strong> ` : ''}${renderMarkdown((it.desc||it.text||'').trim())}</div>`).join('')}
+      ${items.map(it => `<div style="margin-bottom:12px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${it.name ? `<strong>${it.name}${statBlockUsageStr(it)}.</strong> ` : ''}${renderMarkdown((it.desc||it.text||'').trim())}</div>`).join('')}
     </div>`
   }
   const abs = [['STR','str'],['DEX','dex'],['CON','con'],['INT','int'],['WIS','wis'],['CHA','cha']]
