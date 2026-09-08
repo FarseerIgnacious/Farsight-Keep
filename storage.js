@@ -84,7 +84,21 @@ function loadHasSeenWelcome() {
   } catch(e) { return false }
 }
 
+const SNAPSHOT_DIR = path.join(DATA_DIR, 'snapshots')
+
+// Writes a one-off, timestamped copy of app state before a risky mutation
+// (backup restore, one-time data migration). Never overwritten or pruned —
+// it's a forensic trail, not a cache, so a real incident always has a
+// recoverable prior state to fall back to.
+function saveSnapshot(label, data) {
+  if (!fs.existsSync(SNAPSHOT_DIR)) fs.mkdirSync(SNAPSHOT_DIR, { recursive: true })
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const file = path.join(SNAPSHOT_DIR, `${label}-${stamp}.json`)
+  fs.writeFileSync(file, JSON.stringify(data), 'utf8')
+  return file
+}
+
 module.exports = {
   saveCompendium, loadCompendium, saveCampaigns, loadCampaigns, saveEncounters, loadEncounters,
-  saveHasSeenWelcome, loadHasSeenWelcome
+  saveHasSeenWelcome, loadHasSeenWelcome, saveSnapshot
 }

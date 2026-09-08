@@ -4,6 +4,34 @@ const fs   = require('fs')
 
 app.setName('Farsight Keep')
 
+// Prevent two instances from ever running against the same userData files at once.
+// Without this, two windows loaded at different times can each hold their own stale
+// in-memory copy of campaigns.json/compendium.json - whichever one saves last silently
+// overwrites the other's changes (including things the other window created, like a
+// new Adventure), with no warning and no conflict detection anywhere in storage.js.
+const gotTheLock = app.requestSingleInstanceLock()
+
+if (!gotTheLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    // Someone tried to launch a second copy - focus the existing window instead of
+    // letting a second, independent copy of the data load into memory.
+    const existing = BrowserWindow.getAllWindows()[0]
+    if (existing) {
+      if (existing.isMinimized()) existing.restore()
+      existing.focus()
+    }
+  })
+
+  app.whenReady().then(() => {
+    createWindow()
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    })
+  })
+}
+
 function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
@@ -49,13 +77,6 @@ ipcMain.handle('read-file-text', async (event, filePath) => {
 // ── Expose Electron's standard userData path to the renderer ────
 ipcMain.on('get-user-data-path', (event) => {
   event.returnValue = app.getPath('userData')
-})
-
-app.whenReady().then(() => {
-  createWindow()
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
-  })
 })
 
 app.on('window-all-closed', () => {
