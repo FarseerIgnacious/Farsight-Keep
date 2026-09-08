@@ -300,11 +300,15 @@ function pcbDraftFromPC(pc) {
 
   // Map spells from XML format to selectedSpells format
   const selectedSpells = Array.isArray(pc.spells)
-    ? pc.spells.map(s => ({
-        name: s.name,
-        level: s.level || '0',
-        usage: 'slot' // Default to slot-based
-      }))
+    ? pc.spells.map(s => {
+        const { name, castAtLevel } = parseSpellNameAnnotation(s.name)
+        return {
+          name,
+          level: s.level || '0',
+          usage: 'slot', // Default to slot-based
+          ...(castAtLevel != null ? { castAtLevel } : {})
+        }
+      })
     : []
 
   // Parse spell slots from slots field (e.g. "4,3,3,3,2,1,0,0,0")

@@ -332,8 +332,11 @@ function mbFromCompendium(m) {
 
       // Parse attack data - convert legacy XML format to structured format
       // Handle both Monster Builder format (text/atk) and NPC Builder format (desc/bonus)
+      // Never for "Spellcasting" - it lists spells/casting stats, not an attack, and its
+      // "+X to hit with spell attacks" phrasing would otherwise get misread as real attack data.
+      const isSpellcasting = /^spellcasting$/i.test(name.trim())
       let atk = null
-      if (hasAttack && t.attack) {
+      if (!isSpellcasting && hasAttack && t.attack) {
         // Normalize attack bonus - handle both formats
         // NPC format: {bonus: 7} (number) → Monster format: {atk: "+7"} (string)
         let normalizedAtkBonus = t.attack.atk || (t.attack.bonus !== undefined ?
@@ -456,7 +459,7 @@ function mbFromCompendium(m) {
             }
           }
         }
-      } else if (hasAttack && !t.attack) {
+      } else if (!isSpellcasting && hasAttack && !t.attack) {
         // No attack object at all - try to create one from description text
         const descText = t.desc || t.text
         if (descText && window.parseAttackFromText) {
@@ -523,7 +526,7 @@ function mbFromCompendium(m) {
   }
 
   function findSpell(name) {
-    return (compendiumData.spells||[]).find(s => s.name.toLowerCase()===name.toLowerCase())
+    return findSpellPreferModern(name, null)
   }
 
   const addedSpells = new Set() // Track to avoid duplicates
@@ -601,12 +604,13 @@ function mbFromCompendium(m) {
         // Cantrips (at will): fire bolt, light
         const cantrip = line.match(/^cantrips?\s*\([^)]*\)\s*:\s*(.+)/i)
         if (cantrip) {
-          cantrip[1].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-            .forEach(name => {
-              const sp = findSpell(name)
-              if (sp && !addedSpells.has(sp.name.toLowerCase())) {
-                d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'atwill'})
-                addedSpells.add(sp.name.toLowerCase())
+          cantrip[1].split(',').map(s => parseSpellNameAnnotation(s.replace(/\*+$/, '').trim())).filter(e => e.name)
+            .forEach(({name, castAtLevel}) => {
+              const sp = findSpellPreferModern(name, castAtLevel)
+              const key = sp && (sp.name.toLowerCase() + '::' + (castAtLevel ?? ''))
+              if (sp && !addedSpells.has(key)) {
+                d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'atwill', ...(castAtLevel != null ? {castAtLevel} : {})})
+                addedSpells.add(key)
               }
             })
           continue
@@ -615,12 +619,13 @@ function mbFromCompendium(m) {
         // At will: dancing lights
         const atWill = line.match(/^at will\s*:\s*(.+)/i)
         if (atWill) {
-          atWill[1].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-            .forEach(name => {
-              const sp = findSpell(name)
-              if (sp && !addedSpells.has(sp.name.toLowerCase())) {
-                d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'atwill'})
-                addedSpells.add(sp.name.toLowerCase())
+          atWill[1].split(',').map(s => parseSpellNameAnnotation(s.replace(/\*+$/, '').trim())).filter(e => e.name)
+            .forEach(({name, castAtLevel}) => {
+              const sp = findSpellPreferModern(name, castAtLevel)
+              const key = sp && (sp.name.toLowerCase() + '::' + (castAtLevel ?? ''))
+              if (sp && !addedSpells.has(key)) {
+                d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'atwill', ...(castAtLevel != null ? {castAtLevel} : {})})
+                addedSpells.add(key)
               }
             })
           continue
@@ -630,10 +635,10 @@ function mbFromCompendium(m) {
         const dayEach = line.match(/^(\d+)\/day each\s*:\s*(.+)/i)
         if (dayEach) {
           const count = parseInt(dayEach[1])
-          dayEach[2].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-            .forEach(name => {
-              const sp = findSpell(name)
-              if (sp) d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'daily', dailyCount: count})
+          dayEach[2].split(',').map(s => parseSpellNameAnnotation(s.replace(/\*+$/, '').trim())).filter(e => e.name)
+            .forEach(({name, castAtLevel}) => {
+              const sp = findSpellPreferModern(name, castAtLevel)
+              if (sp) d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'daily', dailyCount: count, ...(castAtLevel != null ? {castAtLevel} : {})})
             })
           continue
         }
@@ -642,10 +647,10 @@ function mbFromCompendium(m) {
         const day = line.match(/^(\d+)\/day\s*:\s*(.+)/i)
         if (day) {
           const count = parseInt(day[1])
-          day[2].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-            .forEach(name => {
-              const sp = findSpell(name)
-              if (sp) d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'daily', dailyCount: count})
+          day[2].split(',').map(s => parseSpellNameAnnotation(s.replace(/\*+$/, '').trim())).filter(e => e.name)
+            .forEach(({name, castAtLevel}) => {
+              const sp = findSpellPreferModern(name, castAtLevel)
+              if (sp) d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'daily', dailyCount: count, ...(castAtLevel != null ? {castAtLevel} : {})})
             })
           continue
         }
@@ -653,10 +658,10 @@ function mbFromCompendium(m) {
         // 1st level (4 slots): detect magic, shield
         const slotted = line.match(/^(\d+)(?:st|nd|rd|th)\s+level\s*\([^)]*\)\s*:\s*(.+)/i)
         if (slotted) {
-          slotted[2].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-            .forEach(name => {
-              const sp = findSpell(name)
-              if (sp) d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'slot'})
+          slotted[2].split(',').map(s => parseSpellNameAnnotation(s.replace(/\*+$/, '').trim())).filter(e => e.name)
+            .forEach(({name, castAtLevel}) => {
+              const sp = findSpellPreferModern(name, castAtLevel)
+              if (sp) d.selectedSpells.push({name: sp.name, level: sp.level, usage: 'slot', ...(castAtLevel != null ? {castAtLevel} : {})})
             })
         }
       }
@@ -890,23 +895,7 @@ function renderMonsterPicker() {
   if (!existingContainer) {
     content.innerHTML = `
       <div id="mb-monster-picker-container">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
-          <button onclick="mbCancelMonsterPicker()" style="${MBS.btnSecondary}padding:6px 14px;">
-            &#8592; Back
-          </button>
-          <h2 style="flex:1;font-size:20px;color:#e0d5c5;margin:0;">
-            Select Monster to Copy
-          </h2>
-        </div>
-
-        <input id="mb-monster-search" type="text" placeholder="Search monsters…"
-          value="${mb.monsterPickerQuery}"
-          oninput="mbFilterMonsterPicker(this.value)"
-          style="width:100%;max-width:500px;padding:8px 12px;margin-bottom:16px;background:#5C5C5C;
-                 border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-                 border-radius:4px;font-size:14px;display:block;" />
-
-        <div id="mb-monster-results"></div>
+        ${mbCopyPickerPageHTML('mbCancelMonsterPicker()', 'mbFilterMonsterPicker', 'mb-monster-results')}
       </div>
     `
   }
@@ -915,13 +904,52 @@ function renderMonsterPicker() {
   mbUpdateMonsterResults()
 }
 
-function mbUpdateMonsterResults() {
-  const resultsEl = document.getElementById('mb-monster-results')
-  if (!resultsEl) return
+// Combined pool for "Copy Existing Creature" — monsters plus non-archived NPCs,
+// so either can be used as a starting template.
+function mbCopyableCreatures() {
+  const npcs = (compendiumData.npcs || []).filter(n => !n.archived)
+  return [...compendiumData.monsters, ...npcs]
+}
 
-  const filtered = mb.monsterPickerQuery
-    ? compendiumData.monsters.filter(m => m.name.toLowerCase().includes(mb.monsterPickerQuery.toLowerCase()))
-    : compendiumData.monsters
+function mbFilterCopyablePool(pool, query) {
+  return query
+    ? pool.filter(m => (m.properName || m.name).toLowerCase().includes(query.toLowerCase()))
+    : pool
+}
+
+// Shared "copy existing creature" full-page shell (header + search input + results
+// container) - used by both Monster Builder's own "Select Monster to Copy" and NPC
+// Builder's equivalent picker, so the two can never visually/behaviorally drift apart.
+// `backOnclick`/`searchHandlerName` let each caller wire up its own back-navigation
+// and result-filtering while the markup itself stays exactly one shared copy.
+function mbCopyPickerPageHTML(backOnclick, searchHandlerName, resultsElId) {
+  return `
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px;">
+      <button onclick="${backOnclick}" style="${MBS.btnSecondary}padding:6px 14px;">
+        &#8592; Back
+      </button>
+      <h2 style="flex:1;font-size:20px;color:#e0d5c5;margin:0;">
+        Select Monster to Copy
+      </h2>
+    </div>
+
+    <input id="${resultsElId}-search" type="text" placeholder="Search monsters…"
+      oninput="${searchHandlerName}(this.value)"
+      style="width:100%;max-width:500px;padding:8px 12px;margin-bottom:16px;background:#5C5C5C;
+             border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
+             border-radius:4px;font-size:14px;display:block;" />
+
+    <div id="${resultsElId}"></div>
+  `
+}
+
+// Shared "copy existing creature" card grid - the actual template list of monster/NPC
+// cards, used by both builders' pickers. `onSelectAttr(m, idx)` returns the onclick
+// attribute value for a given filtered item (each caller wires its own selection).
+function mbRenderCopyPickerResults(resultsElId, query, onSelectAttr) {
+  const resultsEl = document.getElementById(resultsElId)
+  if (!resultsEl) return
+  const filtered = mbFilterCopyablePool(mbCopyableCreatures(), query)
 
   resultsEl.innerHTML = `
     <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;overflow:hidden;">
@@ -930,12 +958,12 @@ function mbUpdateMonsterResults() {
         : filtered.map((m, idx) => {
           const displaySize = window.expandSize ? window.expandSize(m.size) : m.size
           return `
-          <div onclick="mbSelectMonsterByIndex(${idx})"
+          <div onclick="${onSelectAttr(m, idx)}"
             style="background:#262F35;border:1px solid #2E2F2D;padding:12px;border-radius:4px;cursor:pointer;"
             onmouseover="this.style.borderColor='#4a9a9a'"
             onmouseout="this.style.borderColor='#2E2F2D'">
             <div style="font-weight:bold;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#7B9BA8;">
-              ${m.name}
+              ${m.properName || m.name}
             </div>
             <div style="font-size:12px;color:#C8C8C8;">CR ${m.cr || '—'} · ${displaySize} ${m.type}</div>
           </div>
@@ -944,15 +972,16 @@ function mbUpdateMonsterResults() {
   `
 }
 
-function mbSelectMonsterByIndex(idx) {
-  const filtered = mb.monsterPickerQuery
-    ? compendiumData.monsters.filter(m => m.name.toLowerCase().includes(mb.monsterPickerQuery.toLowerCase()))
-    : compendiumData.monsters
+function mbUpdateMonsterResults() {
+  mbRenderCopyPickerResults('mb-monster-results', mb.monsterPickerQuery, (m, idx) => `mbSelectMonsterByIndex(${idx})`)
+}
 
+function mbSelectMonsterByIndex(idx) {
+  const filtered = mbFilterCopyablePool(mbCopyableCreatures(), mb.monsterPickerQuery)
   const m = filtered[idx]
   if (!m) return
 
-  mbSelectMonster(m.name)
+  mbSelectMonster(m.properName || m.name)
 }
 
 function mbCancelMonsterPicker() {
@@ -966,7 +995,8 @@ function mbFilterMonsterPicker(query) {
 }
 
 function mbSelectMonster(name) {
-  const m = compendiumData.monsters.find(x => x.name === name)
+  const m = compendiumData.monsters.find(x => x.name === name) ||
+    (compendiumData.npcs || []).find(x => !x.archived && (x.properName || x.name) === name)
   if (!m) return
 
   mb.step = 'form'
@@ -1717,11 +1747,24 @@ function mbRenderTagPicker(field, options) {
   return `<div id="mb-tagpicker-${field}">${mbRenderTagPickerInner(field, options)}</div>`
 }
 
+// Re-renders the tag-picker's inner HTML while preserving the options list's
+// scroll position (same pattern used for the Monsters/Spells tab filter dropdowns'
+// toggleFilterTagValue()) — otherwise toggling a tag while scrolled down resets
+// the list back to the top.
+function mbRerenderTagPicker(field) {
+  const el = document.getElementById('mb-tagpicker-' + field)
+  if (!el) return
+  const optsEl = document.getElementById('mb-tagopts-' + field)
+  const scrollTop = optsEl ? optsEl.scrollTop : 0
+  el.innerHTML = mbRenderTagPickerInner(field, MB_TAG_OPTIONS[field])
+  const newOptsEl = document.getElementById('mb-tagopts-' + field)
+  if (newOptsEl) newOptsEl.scrollTop = scrollTop
+}
+
 function mbAddTag(field, value) {
   if (!mb.draft[field]) mb.draft[field] = []
   if (!mb.draft[field].includes(value)) { mb.draft[field].push(value); mb.dirty = true }
-  const el = document.getElementById('mb-tagpicker-' + field)
-  if (el) el.innerHTML = mbRenderTagPickerInner(field, MB_TAG_OPTIONS[field])
+  mbRerenderTagPicker(field)
 }
 
 function mbAddCustomTag(field) {
@@ -1734,8 +1777,7 @@ function mbAddCustomTag(field) {
     mb.draft[field].push(value)
     mb.dirty = true
     input.value = ''
-    const el = document.getElementById('mb-tagpicker-' + field)
-    if (el) el.innerHTML = mbRenderTagPickerInner(field, MB_TAG_OPTIONS[field])
+    mbRerenderTagPicker(field)
   } else {
     showToast('Already added')
   }
@@ -1747,8 +1789,7 @@ function mbRemoveTag(field, value) {
     const idx = mb.draft[field].indexOf(value)
     if (idx === -1) return
     mb.draft[field].splice(idx, 1); mb.dirty = true
-    const el = document.getElementById('mb-tagpicker-' + field)
-    if (el) el.innerHTML = mbRenderTagPickerInner(field, MB_TAG_OPTIONS[field])
+    mbRerenderTagPicker(field)
   })
 }
 
@@ -2155,6 +2196,37 @@ function mbRenderEntryEditor(entry, section, idx, withAttack) {
   `
 }
 
+// Optional "Cast at Level" dropdown for an already-added spell entry. Only offered
+// for spells with a real base level >= 1 (cantrips don't scale by slot level), and
+// only offers levels ABOVE the spell's own base level - "cast at its own level" is
+// meaningless and isn't a selectable option. Stores castAtLevel on the selectedSpells
+// entry - the same field the "(level X version)" free-text parsing uses - so
+// enrichSelectedSpells and the existing violet badge pick it up unchanged.
+function mbCastAtLevelControl(sp) {
+  const baseLevel = parseInt(sp.level)
+  if (!baseLevel || isNaN(baseLevel) || baseLevel < 1) return ''
+  const options = []
+  for (let lvl = baseLevel + 1; lvl <= 9; lvl++) options.push(lvl)
+  if (options.length === 0) return ''
+  return `
+    <select onchange="mbSetSpellCastAtLevel(${sp._i}, this.value)"
+      style="${MBS.select}font-size:11px;padding:3px 6px;width:auto;">
+      <option value="">Cast at Level…</option>
+      ${options.map(lvl => `<option value="${lvl}" ${sp.castAtLevel === lvl ? 'selected' : ''}>Cast at Level ${lvl}</option>`).join('')}
+    </select>`
+}
+
+function mbSetSpellCastAtLevel(idx, value) {
+  if (!Array.isArray(mb.draft.selectedSpells)) return
+  const sp = mb.draft.selectedSpells[idx]
+  if (!sp) return
+  const lvl = parseInt(value)
+  if (value === '' || isNaN(lvl)) delete sp.castAtLevel
+  else sp.castAtLevel = lvl
+  mb.dirty = true
+  mbRefreshSection('spells')
+}
+
 function mbRenderSpells() {
   const d = mb?.draft || {}
   const selectedSpells = Array.isArray(d.selectedSpells) ? d.selectedSpells : []
@@ -2169,6 +2241,7 @@ function mbRenderSpells() {
     <div style="${MBS.itemRow}">
       <span style="flex:1;font-size:13px;color:#e0d5c5;">${mbEsc(sp.name)}</span>
       ${extra}
+      ${mbCastAtLevelControl(sp)}
       ${rmBtn(sp._i)}
     </div>`
 
@@ -2908,13 +2981,13 @@ function mbSave() {
         const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
         return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
       }),
-      legendaries: (entry.legendaries || []).map(a => {
+      legendaryActions: (entry.legendaryActions || []).map(a => {
         const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
         const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
         const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
         return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
       }),
-      lairs: (entry.lairs || []).map(a => {
+      lairs: (entry.lairActions || []).map(a => {
         const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
         const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
         const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
@@ -2934,6 +3007,7 @@ function mbSave() {
     mb.encounterOnlyMode = false
     window.encounterContext = null
     mb.dirty = false
+    if (window.npcb) window.npcb.dirty = false
 
     // Return to encounter builder
     if (typeof enterEncounterBuilder === 'function') {
@@ -2966,6 +3040,7 @@ function mbSave() {
 
   saveCompendium({monsters: compendiumData.monsters, spells: compendiumData.spells})
   mb.dirty = false
+  if (window.npcb) window.npcb.dirty = false
   showToast(`Monster "${entry.name}" saved.`)
   if (typeof popNav === 'function') popNav()
   else showSection('monsters')
@@ -3171,6 +3246,7 @@ window.mbCancelSpellPick = mbCancelSpellPick
 window.mbAddSpellWithUsage = mbAddSpellWithUsage
 window.mbRemoveSpell = mbRemoveSpell
 window.mbFilterSpells = mbFilterSpells
+window.mbSetSpellCastAtLevel = mbSetSpellCastAtLevel
 window.mbRenderEnvironments = mbRenderEnvironments
 window.mbRefreshSection = mbRefreshSection
 window.mbUpdateHpAvg = mbUpdateHpAvg

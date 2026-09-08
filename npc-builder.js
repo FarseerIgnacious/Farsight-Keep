@@ -40,6 +40,15 @@ function openNPCBuilder(uid = null) {
       function normalizeActions(actions) {
         if (!actions || !Array.isArray(actions)) return actions
         return actions.map(action => {
+          // Never parse "Spellcasting" as an attack - it lists spells/casting stats, not an
+          // attack, and its "+X to hit with spell attacks" phrasing would otherwise get
+          // misread as real attack data. Strip any (bogus) existing attack too.
+          if (/^spellcasting$/i.test((action.name || '').trim())) {
+            if (!action.attack) return action
+            const { attack, ...rest } = action
+            return rest
+          }
+
           const hasExistingAttack = !!action.attack
 
           // Read attack bonus from NPC format (bonus:number) or Monster format (atk:string).
@@ -455,11 +464,15 @@ function npcbDraftFromNPC(npc) {
 
     // Override spells if NPC has custom spell list
     if (npc.spells && npc.spells.length > 0) {
-      d.selectedSpells = npc.spells.map(spell => ({
-        name: spell.name || spell,
-        level: spell.level || 0,
-        usage: spell.usage || 'slot'
-      }))
+      d.selectedSpells = npc.spells.map(spell => {
+        const { name, castAtLevel } = parseSpellNameAnnotation(String(spell.name || spell))
+        return {
+          name,
+          level: spell.level || 0,
+          usage: spell.usage || 'slot',
+          ...(castAtLevel != null ? { castAtLevel } : {})
+        }
+      })
     }
 
     // The monster template is only a fallback for structural fields XML doesn't reliably
@@ -539,11 +552,15 @@ function npcbDraftFromNPC(npc) {
 
   // Parse spells from XML if NPC has them (and they weren't already set from monster/draft)
   if (!baseMonster && npc.spells && npc.spells.length > 0 && d.selectedSpells.length === 0) {
-    d.selectedSpells = npc.spells.map(spell => ({
-      name: spell.name || spell,
-      level: parseInt(spell.level) || 0,
-      usage: 'slot'
-    }))
+    d.selectedSpells = npc.spells.map(spell => {
+      const { name, castAtLevel } = parseSpellNameAnnotation(String(spell.name || spell))
+      return {
+        name,
+        level: parseInt(spell.level) || 0,
+        usage: 'slot',
+        ...(castAtLevel != null ? { castAtLevel } : {})
+      }
+    })
   }
 
   // Parse spell slots from XML slots string (e.g., "0,4,3,2,0,0,0,0,0,0")
@@ -780,68 +797,37 @@ function npcbStartScratch() {
 }
 
 function npcbShowMonsterPicker() {
-  const MBS = window.MBS
+  npcb.monsterPickerQuery = ''
   const content = document.getElementById('content')
-  content.style.padding = '20px'
-  content.style.overflow = ''
-  content.style.overflowY = 'auto'
+  content.style.padding = '24px 24px 24px 240px'
+  content.style.overflow = 'auto'
   content.innerHTML = `
-    <div style="max-width:900px;margin:0 auto;padding-bottom:40px;">
-      <div style="margin-bottom:20px;">
-        <button onclick="npcb.step='choice';renderNPCBuilder()" style="${MBS.btnSecondary}padding:6px 14px;">
-          ← Back
-        </button>
-      </div>
-
-      <h2 style="font-size:20px;color:#e0d5c5;margin-bottom:16px;">Select Monster Template</h2>
-
-      <input id="npcb-monster-search" type="text" placeholder="Search monsters…"
-        style="width:100%;max-width:500px;padding:8px 12px;margin-bottom:16px;background:#5C5C5C;
-               border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-               border-radius:4px;font-size:14px;display:block;"
-        oninput="npcbFilterMonsters(this.value)" />
-
-      <div id="npcb-monster-grid"
-        style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:10px;">
-      </div>
+    <div id="npcb-monster-picker-container">
+      ${mbCopyPickerPageHTML("npcb.step='choice';renderNPCBuilder()", 'npcbFilterMonsters', 'npcb-monster-grid')}
     </div>
   `
-  npcbFilterMonsters('')
+  npcbUpdateMonsterResults()
+}
+
+function npcbUpdateMonsterResults() {
+  mbRenderCopyPickerResults('npcb-monster-grid', npcb.monsterPickerQuery, (m, idx) => `npcbStartFromMonsterByIndex(${idx})`)
 }
 
 function npcbFilterMonsters(query) {
-  const grid = document.getElementById('npcb-monster-grid')
-  if (!grid) return
+  npcb.monsterPickerQuery = query
+  npcbUpdateMonsterResults()
+}
 
-  const filtered = query
-    ? compendiumData.monsters.filter(m => m.name.toLowerCase().includes(query.toLowerCase()))
-    : compendiumData.monsters
-
-  if (filtered.length === 0) {
-    grid.innerHTML = '<p style="color:#C8C8C8;grid-column:1/-1;">No monsters match that search.</p>'
-    return
-  }
-
-  grid.innerHTML = filtered.map(m => `
-    <div onclick="npcbStartFromMonster('${m.name.replace(/'/g, "\\'")}')"
-      style="background:#262F35;border:1px solid #2E2F2D;padding:12px;border-radius:4px;cursor:pointer;"
-      onmouseover="this.style.borderColor='#8b0000'" onmouseout="this.style.borderColor='#2E2F2D'">
-      ${m.portrait ? `
-        <div style="width:100%;height:80px;margin-bottom:8px;border-radius:3px;overflow:hidden;">
-          <img src="${m.portrait}" style="width:100%;height:100%;object-fit:cover;">
-        </div>
-      ` : ''}
-      <div style="font-weight:bold;margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
-        ${m.name}
-      </div>
-      <div style="font-size:12px;color:#C8C8C8;">${window.expandSize ? window.expandSize(m.size) : m.size} ${m.type}</div>
-      <div style="font-size:12px;color:#C8C8C8;">CR ${m.cr || '—'}</div>
-    </div>
-  `).join('')
+function npcbStartFromMonsterByIndex(idx) {
+  const filtered = mbFilterCopyablePool(mbCopyableCreatures(), npcb.monsterPickerQuery)
+  const m = filtered[idx]
+  if (!m) return
+  npcbStartFromMonster(m.properName || m.name)
 }
 
 function npcbStartFromMonster(monsterName) {
-  const monster = compendiumData.monsters.find(m => m.name === monsterName)
+  const monster = compendiumData.monsters.find(m => m.name === monsterName) ||
+    (compendiumData.npcs || []).find(m => !m.archived && (m.properName || m.name) === monsterName)
   if (!monster) {
     showToast('Monster not found')
     return
@@ -1132,6 +1118,7 @@ function npcbSave() {
   // Save to campaign
   if (compendiumData.activeCampaign && compendiumData.campaigns) {
     compendiumData.campaigns[compendiumData.activeCampaign] = {
+      ...compendiumData.campaigns[compendiumData.activeCampaign],  // preserve ALL existing fields (adventures, notes, treasure, etc.)
       players: compendiumData.players,
       npcs: compendiumData.npcs
     }
@@ -1140,6 +1127,7 @@ function npcbSave() {
   }
 
   npcb.dirty = false
+  if (window.mb) window.mb.dirty = false
   const displayName = entry.properName || entry.name
   showToast(`NPC "${displayName}" saved.`)
   if (typeof popNav === 'function') popNav()

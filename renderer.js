@@ -1,4 +1,4 @@
-const { saveCompendium, loadCompendium, saveCampaigns, loadCampaigns, saveEncounters, loadEncounters, saveHasSeenWelcome, loadHasSeenWelcome } = require('./storage.js')
+const { saveCompendium, loadCompendium, saveCampaigns, loadCampaigns, saveEncounters, loadEncounters, saveHasSeenWelcome, loadHasSeenWelcome, saveSnapshot } = require('./storage.js')
 const { shell } = require('electron')
 
 function openBuyMeACoffee() {
@@ -536,6 +536,30 @@ function parseDamageString(dmgStr) {
   }
 }
 
+// A trait/action literally named "Spellcasting" lists spells and casting stats, not an
+// attack — but its text often contains "+X to hit with spell attacks," which the
+// to-hit-bonus regex in parseAttackFromText() would otherwise misread as a real attack.
+// Every attack-parsing entry point below checks this before parsing text/dmg for an item.
+function isSpellcastingName(name) {
+  return /^spellcasting$/i.test((name || '').trim())
+}
+
+// Shared by parseAttackFromText() and getBlocks() — captures an ADDITIVE second damage
+// clause layered onto the primary damage via "plus X (YdZ [+/- W]) Type damage" (distinct
+// from an ALTERNATIVE ", or ... damage" clause, which both callers already handle
+// separately as alt*). Example: "27 (6d8) Fire damage plus 27 (6d8) Force damage."
+function extractPlusClause(text) {
+  if (!text || typeof text !== 'string') return null
+  const match = text.match(/plus\s+\d+\s*\((\d+d\d+(?:\s*[\+\-]\s*\d+)?)\)\s*(\w+)?\s*damage/i)
+  if (!match) return null
+  const parsed = parseDamageString(match[1])
+  return {
+    diceCount: parsed.diceCount,
+    dieType: parsed.dieType,
+    dmgType: match[2] ? match[2].toLowerCase() : ''
+  }
+}
+
 function parseAttackFromText(text) {
   if (!text || typeof text !== 'string') return null
 
@@ -545,6 +569,9 @@ function parseAttackFromText(text) {
     dieType: null,
     dmgBonus: null,
     dmgType: null,
+    additionalDiceCount: null,
+    additionalDieType: null,
+    additionalDmgType: null,
     altDiceCount: null,
     altDieType: null,
     altDmgBonus: null,
@@ -590,6 +617,15 @@ function parseAttackFromText(text) {
     result.altDmgType = altMatch[2] ? altMatch[2].toLowerCase() : result.dmgType
   }
 
+  // Pattern 5: Additive second damage clause - "... damage plus X (YdZ) Type damage"
+  // Distinct from Pattern 4 (", or ... damage"), which is an alternative, not additive, clause.
+  const plusClause = extractPlusClause(text)
+  if (plusClause) {
+    result.additionalDiceCount = plusClause.diceCount
+    result.additionalDieType = plusClause.dieType
+    result.additionalDmgType = plusClause.dmgType || result.dmgType
+  }
+
   // Return null if we didn't find any attack data
   if (!result.atk && !result.diceCount) {
     return null
@@ -611,8 +647,11 @@ function getBlocks(node, tag) {
       recharge: el.querySelector('recharge') ? parseInt(el.querySelector('recharge').textContent) : null,
     }
 
-    // Parse attack data from XML <attack> element (format: Name|Bonus|Damage)
-    const attackEl = el.querySelector('attack')
+    // Parse attack data from XML <attack> element (format: Name|Bonus|Damage) — never for a
+    // "Spellcasting" entry, even if the source XML happens to have an <attack> tag on it; it
+    // lists spells/casting stats, not an attack, and its "+X to hit with spell attacks" phrasing
+    // would otherwise get misread as real attack data.
+    const attackEl = isSpellcastingName(block.name) ? null : el.querySelector('attack')
     if (attackEl) {
       const parts = attackEl.textContent.trim().split('|')
       const atkBonus = parts[1] ? parts[1].trim() : '0'
@@ -671,6 +710,19 @@ function getBlocks(node, tag) {
             }
           }
         }
+
+        // Fallback: if the <attack> element's own damage string didn't encode a second
+        // dice group, but the free text has a "plus X (YdZ) Type damage" continuation
+        // (common for XML that never authored the second clause into <attack>), capture
+        // it directly from text.
+        if (!block.attack.additionalDiceCount && block.text) {
+          const plusClause = extractPlusClause(block.text)
+          if (plusClause) {
+            block.attack.additionalDiceCount = plusClause.diceCount
+            block.attack.additionalDieType = plusClause.dieType
+            block.attack.additionalDmgType = plusClause.dmgType || block.attack.dmgType
+          }
+        }
       } else {
         // Attack with no damage (e.g., save-based abilities)
         block.attack = {
@@ -701,6 +753,8 @@ function parseUsesFromName(name) {
 // this a description-only ability (no structured attack) would silently get no Roll Attack/Roll
 // Damage buttons on the combatant card.
 function recoverAttackData(item) {
+  if (isSpellcastingName(item.name)) return null
+
   const hasExistingAttack = !!(item.attack && (item.attack.atk || item.attack.diceCount))
   if (hasExistingAttack) return item.attack
 
@@ -714,10 +768,10 @@ function recoverAttackData(item) {
     dieType: parsed.dieType || 'd6',
     dmgBonus: parsed.dmgBonus || '',
     dmgType: parsed.dmgType || '',
-    additionalDiceCount: '',
-    additionalDieType: '',
-    additionalDmgType: '',
-    showAdditional: false,
+    additionalDiceCount: parsed.additionalDiceCount || '',
+    additionalDieType: parsed.additionalDieType || '',
+    additionalDmgType: parsed.additionalDmgType || '',
+    showAdditional: !!parsed.additionalDiceCount,
     altDiceCount: parsed.altDiceCount || '',
     altDieType: parsed.altDieType || '',
     altDmgBonus: parsed.altDmgBonus || '',
@@ -2238,70 +2292,187 @@ function restoreFromBackup() {
     if (!file) return
     const reader = new FileReader()
     reader.onload = (event) => {
+      let backup
       try {
-        const backup = JSON.parse(event.target.result)
-
-        // Merge compendium with duplicate detection
-        if (backup.compendium) {
-          if (backup.compendium.monsters) {
-            backup.compendium.monsters.forEach(m => {
-              const existing = compendiumData.monsters.findIndex(x => x.name === m.name)
-              if (existing >= 0) {
-                compendiumData.monsters[existing] = m
-              } else {
-                compendiumData.monsters.push(m)
-              }
-            })
-          }
-
-          if (backup.compendium.spells) {
-            backup.compendium.spells.forEach(s => {
-              const existing = compendiumData.spells.findIndex(x => x.name === s.name)
-              if (existing >= 0) {
-                compendiumData.spells[existing] = s
-              } else {
-                compendiumData.spells.push(s)
-              }
-            })
-          }
-
-          saveCompendium({ monsters: compendiumData.monsters, spells: compendiumData.spells })
-        }
-
-        // Merge campaigns
-        if (backup.campaigns) {
-          Object.keys(backup.campaigns).forEach(campaignName => {
-            compendiumData.campaigns[campaignName] = backup.campaigns[campaignName]
-          })
-          saveCampaigns(compendiumData.campaigns)
-        }
-
-        // Merge encounters
-        if (backup.encounters) {
-          Object.keys(backup.encounters).forEach(campaignName => {
-            if (!enc.list[campaignName]) enc.list[campaignName] = []
-            backup.encounters[campaignName].forEach(encounter => {
-              const existing = enc.list[campaignName].findIndex(e => e.id === encounter.id)
-              if (existing >= 0) {
-                enc.list[campaignName][existing] = encounter
-              } else {
-                enc.list[campaignName].push(encounter)
-              }
-            })
-          })
-          saveEncounters(enc.list)
-        }
-
-        showToast('Backup restored successfully')
-        showSection('home')
-        render()
+        backup = JSON.parse(event.target.result)
       } catch (err) {
         showToast('Error restoring backup: ' + err.message)
+        return
       }
+
+      confirmDelete(
+        'Restore this backup? This will MERGE the backup\'s monsters, spells, campaigns, ' +
+        'and encounters into your current data — matching items are updated, new items are ' +
+        'added, nothing local is deleted. A safety snapshot of your current data will be ' +
+        'saved to disk first.',
+        () => applyBackupRestore(backup)
+      )
     }
     reader.readAsText(file)
   }
   input.click()
+}
+
+function applyBackupRestore(backup) {
+  try {
+    // Persistent, timestamped pre-restore snapshot — forensic trail, never auto-deleted.
+    try {
+      saveSnapshot('pre-restore', {
+        version: '1.0',
+        timestamp: new Date().toISOString(),
+        compendium: { monsters: compendiumData.monsters, spells: compendiumData.spells },
+        campaigns: compendiumData.campaigns,
+        encounters: enc.list
+      })
+    } catch (err) {
+      showToast('Warning: could not save pre-restore snapshot (' + err.message + ')')
+    }
+
+    // Merge compendium with duplicate detection
+    if (backup.compendium) {
+      if (backup.compendium.monsters) {
+        backup.compendium.monsters.forEach(m => {
+          const existing = compendiumData.monsters.findIndex(x => x.name === m.name)
+          if (existing >= 0) {
+            compendiumData.monsters[existing] = m
+          } else {
+            compendiumData.monsters.push(m)
+          }
+        })
+      }
+
+      if (backup.compendium.spells) {
+        backup.compendium.spells.forEach(s => {
+          const existing = compendiumData.spells.findIndex(x => x.name === s.name)
+          if (existing >= 0) {
+            compendiumData.spells[existing] = s
+          } else {
+            compendiumData.spells.push(s)
+          }
+        })
+      }
+
+      saveCompendium({ monsters: compendiumData.monsters, spells: compendiumData.spells })
+    }
+
+    // Merge campaigns — per-field, id-based merge (same replace-if-id-matches /
+    // push-if-new pattern used above for monsters/spells and below for encounters).
+    // NEVER overwrite the whole campaign object — that silently discards anything
+    // (adventures, notes, etc.) added or changed locally since the backup was taken.
+    if (backup.campaigns) {
+      Object.keys(backup.campaigns).forEach(campaignName => {
+        const incoming = backup.campaigns[campaignName]
+
+        if (!compendiumData.campaigns[campaignName]) {
+          // Brand new campaign that doesn't exist locally — nothing to merge into.
+          compendiumData.campaigns[campaignName] = incoming
+          return
+        }
+
+        // Normalize legacy bare-array campaigns to the modern object shape
+        // (same idiom used elsewhere in this file, e.g. campaign creation/import).
+        let existing = compendiumData.campaigns[campaignName]
+        if (Array.isArray(existing)) {
+          existing = {
+            players: existing.filter(p => !p.isNPC),
+            npcs: existing.filter(p => p.isNPC),
+            adventures: [],
+            notes: [],
+            treasure: []
+          }
+          compendiumData.campaigns[campaignName] = existing
+        }
+        if (!existing.players) existing.players = []
+        if (!existing.npcs) existing.npcs = []
+        if (!existing.adventures) existing.adventures = []
+        if (!existing.notes) existing.notes = []
+        if (!existing.treasure) existing.treasure = []
+
+        // Players (matched by uid)
+        if (Array.isArray(incoming.players)) {
+          incoming.players.forEach(p => {
+            const idx = existing.players.findIndex(x => x.uid === p.uid)
+            if (idx >= 0) existing.players[idx] = p
+            else existing.players.push(p)
+          })
+        }
+
+        // NPCs (matched by uid)
+        if (Array.isArray(incoming.npcs)) {
+          incoming.npcs.forEach(n => {
+            const idx = existing.npcs.findIndex(x => x.uid === n.uid)
+            if (idx >= 0) existing.npcs[idx] = n
+            else existing.npcs.push(n)
+          })
+        }
+
+        // Adventures (matched by id)
+        if (Array.isArray(incoming.adventures)) {
+          incoming.adventures.forEach(adv => {
+            const idx = existing.adventures.findIndex(x => x.id === adv.id)
+            if (idx >= 0) existing.adventures[idx] = adv
+            else existing.adventures.push(adv)
+          })
+        }
+
+        // Campaign-level notes (matched by id)
+        if (Array.isArray(incoming.notes)) {
+          incoming.notes.forEach(note => {
+            const idx = existing.notes.findIndex(x => x.id === note.id)
+            if (idx >= 0) existing.notes[idx] = note
+            else existing.notes.push(note)
+          })
+        }
+
+        // Treasure — no stable id in the current schema; append anything not
+        // already present rather than overwrite or drop.
+        if (Array.isArray(incoming.treasure)) {
+          incoming.treasure.forEach(t => {
+            const dup = existing.treasure.some(x => JSON.stringify(x) === JSON.stringify(t))
+            if (!dup) existing.treasure.push(t)
+          })
+        }
+
+        // Any other/unknown scalar fields — fill in only if missing locally,
+        // never clobber a current value.
+        Object.keys(incoming).forEach(key => {
+          if (['players', 'npcs', 'adventures', 'notes', 'treasure'].includes(key)) return
+          if (existing[key] === undefined) existing[key] = incoming[key]
+        })
+      })
+      saveCampaigns(compendiumData.campaigns)
+
+      // If the merge touched the active campaign, refresh the in-memory
+      // players/npcs arrays so the UI reflects merged data immediately.
+      if (compendiumData.activeCampaign && backup.campaigns[compendiumData.activeCampaign]) {
+        const camp = compendiumData.campaigns[compendiumData.activeCampaign]
+        compendiumData.players = camp.players || []
+        compendiumData.npcs = camp.npcs || []
+      }
+    }
+
+    // Merge encounters
+    if (backup.encounters) {
+      Object.keys(backup.encounters).forEach(campaignName => {
+        if (!enc.list[campaignName]) enc.list[campaignName] = []
+        backup.encounters[campaignName].forEach(encounter => {
+          const existing = enc.list[campaignName].findIndex(e => e.id === encounter.id)
+          if (existing >= 0) {
+            enc.list[campaignName][existing] = encounter
+          } else {
+            enc.list[campaignName].push(encounter)
+          }
+        })
+      })
+      saveEncounters(enc.list)
+    }
+
+    showToast('Backup restored successfully')
+    showSection('home')
+    render()
+  } catch (err) {
+    showToast('Error restoring backup: ' + err.message)
+  }
 }
 
 function escapeXML(str) {
@@ -3494,10 +3665,17 @@ function buildCard(c, isActive) {
     </div>
   ` : ''
 
+  const spellInfoHTML = (c.spellSaveDC || c.spellAttackMod) ? `
+    <div style="font-size:11px;color:#888;margin-bottom:8px;">
+      ${[c.spellSaveDC ? 'Spell Save DC ' + c.spellSaveDC : '', c.spellAttackMod ? '+' + c.spellAttackMod + ' to hit' : '']
+        .filter(Boolean).join(' · ')}
+    </div>` : ''
+
   const dailySpellsHTML = c.dailySpells && c.dailySpells.length > 0 ? `
     <div style="margin-top:12px;">
       <div style="font-size:12px;color:#e0d5c5;letter-spacing:.08em;font-weight:700;
                   margin-bottom:6px;">SPELLS</div>
+      ${spellInfoHTML}
       ${c.dailySpells.map((grp, gi) => `
         <div style="margin-bottom:7px;">
           <div style="font-size:11px;color:#e0d5c5;letter-spacing:.05em;margin-bottom:4px;
@@ -3536,14 +3714,23 @@ function buildCard(c, isActive) {
 
   const knownSpellsHTML = (() => {
     if (!c.selectedSpells || c.selectedSpells.length === 0) return ''
-    const sorted = [...c.selectedSpells].sort((a, b) => (parseInt(a.level) || 0) - (parseInt(b.level) || 0))
+    // A non-numeric level (the '?' sentinel used when a spell's name couldn't be
+    // resolved against the compendium) is genuinely unknown — never coerce it to 0,
+    // which would mislabel it as a Cantrip.
+    const spellLevelKey = s => { const n = parseInt(s.level); return Number.isNaN(n) ? '?' : n }
+    const sorted = [...c.selectedSpells].sort((a, b) => {
+      const la = spellLevelKey(a), lb = spellLevelKey(b)
+      if (la === '?') return lb === '?' ? 0 : 1
+      if (lb === '?') return -1
+      return la - lb
+    })
     const levelMap = new Map()
     sorted.forEach((s, i) => {
-      const lvl = parseInt(s.level) || 0
+      const lvl = spellLevelKey(s)
       if (!levelMap.has(lvl)) levelMap.set(lvl, [])
       levelMap.get(lvl).push({ ...s, idx: i })
     })
-    const levelLabel = lvl => lvl === 0 ? 'Cantrips' : `Level ${lvl}`
+    const levelLabel = lvl => lvl === 0 ? 'Cantrips' : lvl === '?' ? 'Unknown Level' : `Level ${lvl}`
 
     function spellDetail(s, lvl) {
       return `
@@ -3551,9 +3738,9 @@ function buildCard(c, isActive) {
           style="display:none;background:#1A1C1E;padding:10px;border-radius:0 0 3px 3px;
                  border:1px solid #0f1e30;border-top:none;">
           <div style="font-size:12px;color:#666;margin-bottom:5px;">
-            ${lvl === 0 ? 'Cantrip' : 'Level ' + lvl}${s.time ? ' · ' + s.time : ''}${s.range ? ' · ' + s.range : ''}${s.duration ? ' · ' + s.duration : ''}
+            ${lvl === 0 ? 'Cantrip' : lvl === '?' ? 'Level ?' : 'Level ' + lvl}${s.time ? ' · ' + s.time : ''}${s.range ? ' · ' + s.range : ''}${s.duration ? ' · ' + s.duration : ''}
           </div>
-          <div style="font-size:12px;color:#aaa;line-height:1.6;white-space:pre-wrap;">${s.text || ''}</div>
+          <div style="font-size:12px;color:#aaa;line-height:1.6;white-space:pre-wrap;">${renderMarkdown(s.text || '')}</div>
         </div>`
     }
 
@@ -3564,6 +3751,11 @@ function buildCard(c, isActive) {
                          overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
                          ${exhausted ? 'text-decoration:line-through;color:#444;' : ''}`
       const rowBg = `background:#0f1e30;border-radius:3px;`
+      const castAtLevelBadge = s.castAtLevel != null
+        ? `<span style="font-size:10px;font-weight:700;color:#8fe0e8;background:#1a4a52;
+                  padding:2px 7px;border-radius:10px;margin-left:6px;letter-spacing:.02em;
+                  white-space:nowrap;flex-shrink:0;">Cast at Level ${s.castAtLevel}</span>`
+        : ''
 
       if (s.atWill) {
         return `
@@ -3573,20 +3765,21 @@ function buildCard(c, isActive) {
                      ${rowBg}padding:6px 10px;cursor:pointer;"
               onmouseover="this.style.background='#142840'"
               onmouseout="this.style.background='#0f1e30'">
-              <span style="${nameStyle}">${s.name}</span>
-              <span style="font-size:11px;color:#555;flex-shrink:0;margin-left:6px;">At will</span>
+              <span style="${nameStyle}">${s.name}</span>${castAtLevelBadge}
+              <span style="font-size:11px;color:#C0C0C0;flex-shrink:0;margin-left:6px;">At will</span>
             </div>
             ${spellDetail(s, lvl)}
           </div>`
       }
 
       if (s.usesMax != null) {
-        const countColor = exhausted ? '#4a9a9a' : partial ? '#e0c060' : '#e0d5c5'
+        // Always the same size/color regardless of exhausted/partial/full state - a
+        // decrement/increment must never make the number flash to a different style.
         const counterHTML = s.perDay
           ? (exhausted || partial
-              ? `<strong style="font-size:14px;color:${countColor};">${s.usesCurrent}</strong><span style="font-size:11px;color:#444;"> / ${s.usesMax}/day</span>`
-              : `<span style="font-size:12px;color:#555;">${s.usesMax}/day</span>`)
-          : `<strong style="font-size:14px;color:${countColor};">${s.usesCurrent}</strong><span style="font-size:11px;color:#444;"> / ${s.usesMax} uses</span>`
+              ? `<span style="font-size:12px;color:#C0C0C0;">${s.usesCurrent} / ${s.usesMax}/day</span>`
+              : `<span style="font-size:12px;color:#C0C0C0;">${s.usesMax}/day</span>`)
+          : `<span style="font-size:12px;color:#C0C0C0;">${s.usesCurrent} / ${s.usesMax} uses</span>`
         return `
           <div style="margin-bottom:4px;">
             <div style="display:flex;align-items:center;gap:0;${rowBg}padding:4px 8px 4px 5px;"
@@ -3601,7 +3794,7 @@ function buildCard(c, isActive) {
               <div onclick="toggleCombatantSpell('${c.uid}',${s.idx})"
                 style="display:flex;align-items:center;gap:5px;flex:1;min-width:0;
                        cursor:pointer;padding:2px 8px;">
-                <span style="${nameStyle}">${s.name}</span>
+                <span style="${nameStyle}">${s.name}</span>${castAtLevelBadge}
                 <span id="cspell-arrow-${c.uid}-${s.idx}"
                   style="font-size:11px;color:#555;flex-shrink:0;">▼</span>
               </div>
@@ -3625,7 +3818,7 @@ function buildCard(c, isActive) {
                    ${rowBg}padding:6px 10px;cursor:pointer;"
             onmouseover="this.style.background='#142840'"
             onmouseout="this.style.background='#0f1e30'">
-            <span style="${nameStyle}">${s.name}</span>
+            <span style="${nameStyle}">${s.name}</span>${castAtLevelBadge}
             <span id="cspell-arrow-${c.uid}-${s.idx}"
               style="font-size:11px;color:#555;flex-shrink:0;margin-left:6px;">▼</span>
           </div>
@@ -3637,6 +3830,7 @@ function buildCard(c, isActive) {
       <div style="margin-top:12px;">
         <div style="font-size:12px;color:#e0d5c5;letter-spacing:.08em;font-weight:700;
                     margin-bottom:6px;">SPELLS</div>
+        ${spellInfoHTML}
         ${Array.from(levelMap.entries()).map(([lvl, spells]) => `
           <div style="margin-bottom:8px;">
             <div style="font-size:11px;color:#e0d5c5;letter-spacing:.05em;margin-bottom:4px;
@@ -3655,8 +3849,8 @@ function buildCard(c, isActive) {
              scrollbar-width:none;-ms-overflow-style:none;">
       <style>
         #card-${c.uid}::-webkit-scrollbar { display: none; }
-        #hp-input-${c.uid}::placeholder { color: #C8C8C8; opacity: 1; }
-        #hp-input-${c.uid}::-moz-placeholder { color: #C8C8C8; opacity: 1; }
+        #hp-input-${c.uid}::placeholder { color: #8C8C8C; opacity: 1; }
+        #hp-input-${c.uid}::-moz-placeholder { color: #8C8C8C; opacity: 1; }
         #card-${c.uid} input[type=number]::-webkit-inner-spin-button,
         #card-${c.uid} input[type=number]::-webkit-outer-spin-button {
           -webkit-appearance: none;
@@ -3712,31 +3906,40 @@ function buildCard(c, isActive) {
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-bottom:12px;">
-        <div style="background:#1A1C1E;padding:7px 6px;border-radius:3px;text-align:center;">
-          <div style="font-size:11px;color:#C8C8C8;letter-spacing:.05em;margin-bottom:2px;">INIT</div>
-          <input type="number" value="${c.initiative}"
-            onchange="setInit('${c.uid}',this.value)"
-            style="background:transparent;border:none;color:#e0d5c5;font-family:var(--app-font);
-                   font-size:18px;font-weight:bold;width:100%;text-align:center;outline:none;
-                   padding:0;margin:0;-moz-appearance:textfield;
-                   -webkit-appearance:none;appearance:none;box-sizing:border-box;" />
+        <div style="display:flex;clip-path:polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+                    background:#4587A2;padding:2px;">
+          <div style="flex:1;background:#1A1C1E;padding:10px 14px;text-align:center;
+                      clip-path:polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%);
+                      box-sizing:border-box;">
+            <div style="font-size:11px;color:#C8C8C8;letter-spacing:.05em;margin-bottom:2px;">INIT</div>
+            <input type="number" value="${c.initiative}"
+              onchange="setInit('${c.uid}',this.value)"
+              style="background:transparent;border:none;color:#e0d5c5;font-family:var(--app-font);
+                     font-size:18px;font-weight:bold;width:100%;text-align:center;outline:none;
+                     padding:0;margin:0;-moz-appearance:textfield;
+                     -webkit-appearance:none;appearance:none;box-sizing:border-box;" />
+          </div>
         </div>
-        <div style="background:#1A1C1E;padding:7px 6px 27px 6px;text-align:center;
-                    clip-path:polygon(0% 0%, 100% 0%, 100% 65%, 50% 100%, 0% 65%);
-                    position:relative;">
-          <div style="font-size:11px;color:#C8C8C8;letter-spacing:.05em;margin-bottom:2px;">AC</div>
-          <div style="font-size:18px;font-weight:bold;">${(() => {
-            const acNum = parseInt(c.ac)
-            return !isNaN(acNum) ? acNum : '—'
-          })()}</div>
-          ${(() => {
-            const armorText = c.armor || (typeof c.ac === 'string' ?
-              (c.ac.match(/\(([^)]+)\)/) || [])[1] : '')
-            return armorText ?
-              `<div style="font-size:9px;color:#888;margin-top:2px;">${armorText}</div>` : ''
-          })()}
+        <div style="display:flex;clip-path:polygon(0% 0%, 100% 0%, 100% 65%, 50% 100%, 0% 65%);
+                    background:#3ec6ff;padding:2px;">
+          <div style="flex:1;background:#1A1C1E;padding:7px 6px 27px 6px;text-align:center;
+                      clip-path:polygon(0% 0%, 100% 0%, 100% 65%, 50% 100%, 0% 65%);
+                      box-sizing:border-box;">
+            <div style="font-size:11px;color:#C8C8C8;letter-spacing:.05em;margin-bottom:2px;">AC</div>
+            <div style="font-size:18px;font-weight:bold;">${(() => {
+              const acNum = parseInt(c.ac)
+              return !isNaN(acNum) ? acNum : '—'
+            })()}</div>
+            ${(() => {
+              const armorText = c.armor || (typeof c.ac === 'string' ?
+                (c.ac.match(/\(([^)]+)\)/) || [])[1] : '')
+              return armorText ?
+                `<div style="font-size:9px;color:#888;margin-top:2px;">${armorText}</div>` : ''
+            })()}
+          </div>
         </div>
-        <div style="background:#1A1C1E;padding:7px 6px;border-radius:3px;text-align:center;">
+        <div style="background:#1A1C1E;padding:7px 10px;border-radius:999px;text-align:center;
+                    border:2px solid #4587A2;box-sizing:border-box;">
           <div style="font-size:11px;color:#C8C8C8;letter-spacing:.05em;margin-bottom:2px;">SPD</div>
           ${(() => {
             if (!c.speed || c.speed === '—') return '<div style="font-size:15px;font-weight:bold;">—</div>'
@@ -4527,13 +4730,17 @@ function addFromPC(uid) {
 
       return { name: a.name, text: a.text, charges, chargesCurrent, recharge, rechargeAvailable: true, attack: recoverAttackData(a) }
     }),
+    bonusActions: mapActionsForCombatant(pc.bonusActions),
+    reactions: mapActionsForCombatant(pc.reactions),
+    legendaryActions: mapActionsForCombatant(pc.legendaryActions),
+    lairs: mapActionsForCombatant(pc.lairActions),
     spellSlots,
     dailySpells: parseDailySpells(pcTraits),
     spells: pc.spells || [],
-    selectedSpells: pc.selectedSpells || [],
+    selectedSpells: enrichSelectedSpells(pc.selectedSpells || pc._draft?.selectedSpells || []),
     spellcastingType: pc.spellcastingType || null,
-    spellAttackMod: pc.spellAttackMod ?? null,
-    spellSaveDC: pc.spellSaveDC ?? null,
+    spellAttackMod: pc.spellAttackMod ?? pc._draft?.spellAttackMod ?? null,
+    spellSaveDC: pc.spellSaveDC ?? pc._draft?.spellSaveDC ?? null,
     portrait: pc.portrait || null,
     notes: pc.notes || [],
     skills: pc.skills || [],
@@ -4560,40 +4767,22 @@ function addFromNPC(uid) {
     const nums = npc.slots.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n > 0)
     if (nums.length > 0) spellSlots = nums.map((total, i) => ({ level: i + 1, total, used: 0 }))
   }
-  const npcTraits = (npc.traits || []).map(t => {
-    const inferred = (t.charges === null && t.recharge === null) ? parseUsesFromName(t.name) : {}
-    const charges = t.charges !== null ? t.charges : (inferred.charges ?? null)
-    const recharge = t.recharge !== null ? t.recharge : (inferred.recharge ?? null)
-    return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(t) }
-  })
+  const npcTraits = mapActionsForCombatant(npc.traits)
   const initRoll = Math.floor(Math.random() * 20) + 1
   const abilities = Array.isArray(npc.abilities) ? npc.abilities : [10,10,10,10,10,10]
 
-  // Convert NPC spell name strings to full spell objects
-  const selectedSpells = (npc.spells || []).map(s => {
-    if (typeof s === 'string') {
-      // Look up full spell object from compendium
-      const fullSpell = compendiumData.spells.find(sp => sp.name === s)
-      if (fullSpell) {
-        const spell = {
-          name: fullSpell.name,
-          level: fullSpell.level,
-          text: fullSpell.text || fullSpell.desc || '',
-          time: fullSpell.time || '',
-          range: fullSpell.range || '',
-          duration: fullSpell.duration || ''
-        }
-        // For cantrips, mark as at-will; for leveled spells, use spell slots (no extra fields needed)
-        if (fullSpell.level === '0') {
-          spell.atWill = true
-        }
-        return spell
-      } else {
-        return { name: s, level: '0', atWill: true, text: '' }
-      }
-    }
-    return s // Already an object, use as-is
-  })
+  // NPC Builder's canonical spell storage is npc.selectedSpells (usage 'atwill'/'daily'/'slot'
+  // + dailyCount) - npc.spells is only a derived subset (slot-based spell names, for legacy
+  // lookup), so it's frequently empty even when the NPC has real at-will/daily spells. Fall
+  // back to npc.spells (normalizing any plain name string into a slot-usage object) only for
+  // older NPC records that predate selectedSpells entirely.
+  const rawSelectedSpells = npc.selectedSpells || npc._draft?.selectedSpells ||
+    (Array.isArray(npc.spells) ? npc.spells.map(s => typeof s === 'string' ? { name: s, usage: 'slot' } : s) : [])
+  const selectedSpells = enrichSelectedSpells(rawSelectedSpells)
+
+  const manualDC = npc.spellSaveDC ?? npc._draft?.spellSaveDC ?? null
+  const manualAtk = npc.spellAttackMod ?? npc._draft?.spellAttackMod ?? null
+  const derivedDCAtk = manualDC == null ? deriveSpellcastingDCAndAtk(npc.traits, npc.actions) : null
 
   enc.current.combatants.push({
     uid: makeCombatantUid(),
@@ -4618,23 +4807,17 @@ function addFromNPC(uid) {
     cha: parseInt(abilities[5]) || parseInt(npc.cha) || 10,
     conditions: [],
     traits: npcTraits,
-    actions: (npc.actions || []).map(a => {
-      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
-      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
-      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return {
-        ...a,
-        charges,
-        recharge,
-        chargesCurrent: charges !== null ? charges : null,
-        rechargeAvailable: true,
-        attack: recoverAttackData(a)
-      }
-    }),
+    actions: mapActionsForCombatant(npc.actions),
+    bonusActions: mapActionsForCombatant(npc.bonusActions),
+    reactions: mapActionsForCombatant(npc.reactions),
+    legendaryActions: mapActionsForCombatant(npc.legendaryActions),
+    lairs: mapActionsForCombatant(npc.lairActions),
     spellSlots,
     dailySpells: parseDailySpells(npcTraits),
     spells: npc.spells || [],
     selectedSpells: selectedSpells,
+    spellSaveDC: manualDC ?? derivedDCAtk?.spellSaveDC ?? null,
+    spellAttackMod: manualAtk ?? derivedDCAtk?.spellAttackMod ?? null,
     portrait: npc.portrait || npc._draft?.portrait || null,
     notes: npc.notes || [],
     skills: npc.skills || [],
@@ -4695,46 +4878,36 @@ function showMonsterChoice(name) {
   }
 }
 
-function addMonsterAsIs(name) {
-  const m = compendiumData.monsters.find(x => x.name === name)
-  if (!m) return
-  const hpNum = parseInt(m.hp) || 10
-  let spellSlots = null
-  if (m.slots) {
-    const nums = m.slots.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n > 0)
-    if (nums.length > 0) spellSlots = nums.map((total, i) => ({ level: i + 1, total, used: 0 }))
-  }
-  const initRoll = Math.floor(Math.random() * 20) + 1
-  const traits = (m.traits || []).map(t => {
-    const inferred = (t.charges === null && t.recharge === null) ? parseUsesFromName(t.name) : {}
-    const charges = t.charges !== null ? t.charges : (inferred.charges ?? null)
-    const recharge = t.recharge !== null ? t.recharge : (inferred.recharge ?? null)
-    return { ...t, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(t) }
+// Shared by every combatant-creation action-list mapper (addMonsterAsIs/addFromNPC) -
+// infers charges/recharge from the name when neither is set, and recovers attack data.
+function mapActionsForCombatant(list) {
+  return (list || []).map(a => {
+    const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
+    const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
+    const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
+    return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
   })
-  // Build abilities array for consistency with PCs/NPCs
-  const abilities = [
-    String(parseInt(m.str) || 10),
-    String(parseInt(m.dex) || 10),
-    String(parseInt(m.con) || 10),
-    String(parseInt(m.int) || 10),
-    String(parseInt(m.wis) || 10),
-    String(parseInt(m.cha) || 10)
-  ]
+}
 
-  // Enrich selectedSpells with full spell data from compendium
-  const rawSelectedSpells = m.selectedSpells || m._draft?.selectedSpells || parseMonsterSpells(m.spells, traits, m.actions) || []
-  const selectedSpells = rawSelectedSpells.map(spell => {
-    const fullSpell = compendiumData.spells.find(sp => sp.name === spell.name)
+// Shared by every combatant-creation spell mapper (addMonsterAsIs/addFromNPC) - converts
+// stored selectedSpells (builder format: usage 'atwill'/'daily'/'slot' + dailyCount) into
+// the atWill/usesMax/usesCurrent/perDay shape buildCard() renders, enriching each with full
+// spell text/time/range/duration looked up from the compendium by name.
+function enrichSelectedSpells(rawSelectedSpells) {
+  return (rawSelectedSpells || []).map(spell => {
+    const fullSpell = findSpellPreferModern(spell.name, spell.castAtLevel ?? null) ||
+      compendiumData.spells.find(sp => sp.name === spell.name)
     const enriched = {
       ...(fullSpell || {}),
       ...spell,
+      castAtLevel: spell.castAtLevel ?? null,
       text: fullSpell?.text || fullSpell?.desc || spell.text || '',
       time: fullSpell?.time || spell.time || '',
       range: fullSpell?.range || spell.range || '',
       duration: fullSpell?.duration || spell.duration || ''
     }
 
-    // Convert monster builder format to rendering format
+    // Convert builder format to rendering format
     if (spell.usage === 'atwill') {
       enriched.atWill = true
       delete enriched.usage
@@ -4753,6 +4926,36 @@ function addMonsterAsIs(name) {
 
     return enriched
   })
+}
+
+function addMonsterAsIs(name) {
+  const m = compendiumData.monsters.find(x => x.name === name)
+  if (!m) return
+  const hpNum = parseInt(m.hp) || 10
+  let spellSlots = null
+  if (m.slots) {
+    const nums = m.slots.split(',').map(n => parseInt(n.trim())).filter(n => !isNaN(n) && n > 0)
+    if (nums.length > 0) spellSlots = nums.map((total, i) => ({ level: i + 1, total, used: 0 }))
+  }
+  const initRoll = Math.floor(Math.random() * 20) + 1
+  const traits = mapActionsForCombatant(m.traits)
+  // Build abilities array for consistency with PCs/NPCs
+  const abilities = [
+    String(parseInt(m.str) || 10),
+    String(parseInt(m.dex) || 10),
+    String(parseInt(m.con) || 10),
+    String(parseInt(m.int) || 10),
+    String(parseInt(m.wis) || 10),
+    String(parseInt(m.cha) || 10)
+  ]
+
+  // Enrich selectedSpells with full spell data from compendium
+  const rawSelectedSpells = m.selectedSpells || m._draft?.selectedSpells || parseMonsterSpells(m.spells, traits, m.actions) || []
+  const selectedSpells = enrichSelectedSpells(rawSelectedSpells)
+
+  const manualDC = m.spellSaveDC ?? m._draft?.spellSaveDC ?? null
+  const manualAtk = m.spellAttackMod ?? m._draft?.spellAttackMod ?? null
+  const derivedDCAtk = manualDC == null ? deriveSpellcastingDCAndAtk(traits, m.actions) : null
 
   const combatantName = nextMonsterCombatantName(m.name)
   enc.current.combatants.push({
@@ -4779,40 +4982,17 @@ function addMonsterAsIs(name) {
     abilities: abilities,
     conditions: [],
     traits,
-    actions: (m.actions || []).map(a => {
-      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
-      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
-      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
-    }),
-    bonusActions: (m.bonusActions || []).map(a => {
-      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
-      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
-      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
-    }),
-    reactions: (m.reactions || []).map(a => {
-      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
-      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
-      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
-    }),
-    legendaryActions: (m.legendaryActions || []).map(a => {
-      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
-      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
-      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
-    }),
-    lairs: (m.lairActions || []).map(a => {
-      const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
-      const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
-      const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
-      return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null, rechargeAvailable: true, attack: recoverAttackData(a) }
-    }),
+    actions: mapActionsForCombatant(m.actions),
+    bonusActions: mapActionsForCombatant(m.bonusActions),
+    reactions: mapActionsForCombatant(m.reactions),
+    legendaryActions: mapActionsForCombatant(m.legendaryActions),
+    lairs: mapActionsForCombatant(m.lairActions),
     spellSlots,
     dailySpells: parseDailySpells(traits),
     spells: parseMonsterSpells(m.spells, traits, m.actions),
     selectedSpells: selectedSpells,
+    spellSaveDC: manualDC ?? derivedDCAtk?.spellSaveDC ?? null,
+    spellAttackMod: manualAtk ?? derivedDCAtk?.spellAttackMod ?? null,
     portrait: m.portrait || null,
     skills: m.skill || m.skills || '',
     savingThrows: m.save || m.savingThrows || '',
@@ -5122,19 +5302,100 @@ function parseDailySpells(traits) {
   return groups.length ? groups : null
 }
 
+// Extracts a trailing "(level N version)" annotation (case-insensitive) as structured
+// data, e.g. "Ray of Sickness [2024] (level 2 version)" -> { name: "Ray of Sickness [2024]",
+// castAtLevel: 2 }. Must run BEFORE cleanSpellName's generic parenthetical-stripping loop,
+// which would otherwise discard this clause along with any other trailing "(...)".
+function parseSpellNameAnnotation(rawName) {
+  const s = (rawName || '').trim()
+  const m = s.match(/^(.*?)\s*\(\s*level\s+(\d+)\s+version\s*\)\s*$/i)
+  if (m) return { name: m[1].trim(), castAtLevel: parseInt(m[2], 10) }
+  return { name: s, castAtLevel: null }
+}
+
+// Prefers a "{baseName} [2024]" compendium entry over a bare/classic match when the
+// annotation implies a modern spell reference (castAtLevel != null) and baseName isn't
+// already tagged "[2024]". Falls back to an exact match — identical to a plain exact-name
+// lookup when castAtLevel is null.
+function findSpellPreferModern(baseName, castAtLevel) {
+  if (!baseName) return null
+  const lower = baseName.toLowerCase()
+  if (castAtLevel != null && !/\[2024\]\s*$/i.test(baseName)) {
+    const modern = compendiumData.spells.find(sp => sp.name.toLowerCase() === lower + ' [2024]')
+    if (modern) return modern
+  }
+  return compendiumData.spells.find(sp => sp.name.toLowerCase() === lower) || null
+}
+
+// Strips trailing decorations from a free-text spell-list entry so it matches the
+// compendium by name, e.g. "Mage Hand (the hand is Invisible)" -> "Mage Hand",
+// "Nondetection (self only)" -> "Nondetection", "Fireball*" -> "Fireball". Loops
+// because decorations can appear in either order or be doubled up.
+function cleanSpellName(raw) {
+  let s = (raw || '').trim()
+  let prev
+  do {
+    prev = s
+    s = s.replace(/\*+\s*$/, '').replace(/\s*\([^)]*\)\s*$/, '').trim()
+  } while (s !== prev)
+  return s
+}
+
+// Splits a comma-separated spell list WITHOUT breaking apart a single entry whose
+// own parenthetical annotation contains internal commas, e.g. "Shapechange (Beast or
+// Humanoid form only, no Temporary Hit Points gained from the spell)" is one entry,
+// not three. A plain .split(',') would shred it at each internal comma.
+function splitSpellList(listStr) {
+  const segments = []
+  let depth = 0
+  let current = ''
+  for (const ch of listStr) {
+    if (ch === '(') depth++
+    else if (ch === ')') depth = Math.max(0, depth - 1)
+    if (ch === ',' && depth === 0) {
+      segments.push(current)
+      current = ''
+    } else {
+      current += ch
+    }
+  }
+  if (current.trim() || segments.length) segments.push(current)
+  return segments
+}
+
 function parseMonsterSpells(spellsText, traits, actions) {
   const spells = []
   const seen = new Set()
 
-  function addSpell(name, fallbackLevel, tracking) {
-    const key = name.toLowerCase()
+  // Extracts a "(level N version)" annotation before the generic cleanSpellName pass
+  // so it survives as structured data instead of being silently discarded.
+  function extractSpellEntry(raw) {
+    const { name: withoutLevel, castAtLevel } = parseSpellNameAnnotation(raw)
+    return { name: cleanSpellName(withoutLevel), castAtLevel }
+  }
+
+  function addSpell(name, fallbackLevel, tracking, castAtLevel) {
+    // Dedup key includes castAtLevel so a base-level casting and a "(level N version)"
+    // casting of the same spell are kept as distinct entries, never merged.
+    const key = name.toLowerCase() + '::' + (castAtLevel ?? '')
     if (seen.has(key)) return
     seen.add(key)
-    const found = compendiumData.spells.find(s => s.name.toLowerCase() === key)
-    const base = found
-      ? { ...found }
-      : { name, level: fallbackLevel != null ? String(fallbackLevel) : '0', time: '', range: '', duration: '', text: '' }
-    spells.push({ ...base, ...tracking })
+    const found = findSpellPreferModern(name, castAtLevel)
+    let base
+    if (found) {
+      base = { ...found }
+    } else {
+      // Lookup failed even after name cleanup (typo / homebrew / missing from
+      // compendium). A spell carrying usage tracking (perDay/usesMax) is by
+      // definition NOT a cantrip — 5e cantrips are unlimited/at-will — so don't
+      // mislabel it as one just because its real level is unknown.
+      const isTrackedNonCantrip = !!(tracking && (tracking.perDay || tracking.usesMax != null))
+      const level = fallbackLevel != null
+        ? String(fallbackLevel)
+        : (isTrackedNonCantrip ? '?' : '0')
+      base = { name, level, time: '', range: '', duration: '', text: '' }
+    }
+    spells.push({ ...base, ...tracking, ...(castAtLevel != null ? { castAtLevel } : {}) })
   }
 
   function scanLines(text) {
@@ -5144,39 +5405,39 @@ function parseMonsterSpells(spellsText, traits, actions) {
       // Cantrips (at will): fire bolt, light, mage hand
       const cantrip = line.match(/^cantrips?\s*\([^)]*\)\s*:\s*(.+)/i)
       if (cantrip) {
-        cantrip[1].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-          .forEach(n => addSpell(n, 0, { atWill: true }))
+        splitSpellList(cantrip[1]).map(extractSpellEntry).filter(e => e.name)
+          .forEach(e => addSpell(e.name, 0, { atWill: true }, e.castAtLevel))
         continue
       }
       // 1st level (4 slots): detect magic, shield
       const slotted = line.match(/^(\d+)(?:st|nd|rd|th)\s+level\s*\([^)]*\)\s*:\s*(.+)/i)
       if (slotted) {
         const lvl = parseInt(slotted[1])
-        slotted[2].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-          .forEach(n => addSpell(n, lvl, {}))
+        splitSpellList(slotted[2]).map(extractSpellEntry).filter(e => e.name)
+          .forEach(e => addSpell(e.name, lvl, {}, e.castAtLevel))
         continue
       }
       // At will: dancing lights (innate)
       const atWill = line.match(/^at will\s*:\s*(.+)/i)
       if (atWill) {
-        atWill[1].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-          .forEach(n => addSpell(n, 0, { atWill: true }))
+        splitSpellList(atWill[1]).map(extractSpellEntry).filter(e => e.name)
+          .forEach(e => addSpell(e.name, 0, { atWill: true }, e.castAtLevel))
         continue
       }
       // 3/day each: darkness, faerie fire (innate)
       const dayEach = line.match(/^(\d+)\/day each\s*:\s*(.+)/i)
       if (dayEach) {
         const n = parseInt(dayEach[1])
-        dayEach[2].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-          .forEach(name => addSpell(name, null, { usesMax: n, usesCurrent: n, perDay: true }))
+        splitSpellList(dayEach[2]).map(extractSpellEntry).filter(e => e.name)
+          .forEach(e => addSpell(e.name, null, { usesMax: n, usesCurrent: n, perDay: true }, e.castAtLevel))
         continue
       }
       // 1/day: misty step (innate)
       const day = line.match(/^(\d+)\/day\s*:\s*(.+)/i)
       if (day) {
         const n = parseInt(day[1])
-        day[2].split(',').map(s => s.replace(/\*+$/, '').trim()).filter(Boolean)
-          .forEach(name => addSpell(name, null, { usesMax: n, usesCurrent: n, perDay: true }))
+        splitSpellList(day[2]).map(extractSpellEntry).filter(e => e.name)
+          .forEach(e => addSpell(e.name, null, { usesMax: n, usesCurrent: n, perDay: true }, e.castAtLevel))
       }
     }
   }
@@ -5197,6 +5458,28 @@ function parseMonsterSpells(spellsText, traits, actions) {
   }
 
   return spells.length ? spells : null
+}
+
+// Extracts "(spell save DC 19, +11 to hit with spell attacks)" or "(spell save DC 21)"
+// (no to-hit clause when no spell in the list needs an attack roll) from a
+// Spellcasting/Innate Spellcasting trait or action's free text.
+function parseSpellcastingDCAndAtk(text) {
+  if (!text) return { spellSaveDC: null, spellAttackMod: null }
+  const m = text.match(/spell save DC\s*(\d+)(?:\s*,\s*\+(\d+)\s*to hit with spell attacks)?/i)
+  if (!m) return { spellSaveDC: null, spellAttackMod: null }
+  return { spellSaveDC: parseInt(m[1], 10), spellAttackMod: m[2] != null ? parseInt(m[2], 10) : null }
+}
+
+// Scans traits+actions for the first Spellcasting/Innate entry and derives DC/ATK from
+// its text. Manual builder fields always win; this is only a fallback for 2024-format
+// free-text monsters/NPCs that never had the manual fields populated.
+function deriveSpellcastingDCAndAtk(traits, actions) {
+  for (const e of [...(traits || []), ...(actions || [])]) {
+    if (!/spellcast|innate/i.test(e.name || '')) continue
+    const result = parseSpellcastingDCAndAtk(e.text || e.desc || '')
+    if (result.spellSaveDC != null) return result
+  }
+  return { spellSaveDC: null, spellAttackMod: null }
 }
 
 // ── Save Encounter ────────────────────────────────────────────────
@@ -6122,7 +6405,12 @@ function buildMonsterDetailCard(m) {
 
         function renderSpell(sp, prefix = '') {
           const fullSpell = compendiumData.spells.find(s => s.name === sp.name)
-          if (!fullSpell) return `<div style="padding:6px 8px;font-size:13px;color:#888;">${prefix}${sp.name}</div>`
+          const castAtLevelBadge = sp.castAtLevel != null
+            ? `<span style="font-size:10px;font-weight:700;color:#8fe0e8;background:#1a4a52;
+                      padding:2px 7px;border-radius:10px;margin-left:6px;letter-spacing:.02em;
+                      white-space:nowrap;">Cast at Level ${sp.castAtLevel}</span>`
+            : ''
+          if (!fullSpell) return `<div style="padding:6px 8px;font-size:13px;color:#888;">${prefix}${sp.name}${castAtLevelBadge}</div>`
           const id = 'mspell-' + sp.name.replace(/[^a-zA-Z0-9]/g, '-') + '-' + Math.random().toString(36).slice(2, 7)
           return `
             <div style="margin-bottom:4px;">
@@ -6131,7 +6419,7 @@ function buildMonsterDetailCard(m) {
                        display:flex;justify-content:space-between;align-items:center;"
                 onmouseover="this.style.background='#1a4a8a'"
                 onmouseout="this.style.background='#0f3460'">
-                <span style="font-size:13px;color:#e0d5c5;">${prefix}${sp.name}</span>
+                <span style="font-size:13px;color:#e0d5c5;">${prefix}${sp.name}${castAtLevelBadge}</span>
                 <span style="font-size:11px;color:#888;background:#1A1C1E;padding:2px 8px;border-radius:3px;min-width:24px;text-align:center;">
                   ${(fullSpell.level === '0' || fullSpell.level === 0 || !fullSpell.level) ? 'C' : fullSpell.level}
                 </span>
@@ -6169,8 +6457,11 @@ function buildMonsterDetailCard(m) {
           spellSlots = draft.spellSlots
         }
 
-        const spellSaveDC = m._draft?.spellSaveDC || m.spellSaveDC
-        const spellAttackMod = m._draft?.spellAttackMod || m.spellAttackMod
+        const manualDC = m._draft?.spellSaveDC || m.spellSaveDC
+        const manualAtk = m._draft?.spellAttackMod || m.spellAttackMod
+        const derivedDCAtk = manualDC ? null : deriveSpellcastingDCAndAtk(m.traits, m.actions)
+        const spellSaveDC = manualDC || derivedDCAtk?.spellSaveDC
+        const spellAttackMod = manualAtk || derivedDCAtk?.spellAttackMod
         const spellInfo = []
         if (spellSaveDC) spellInfo.push('Spell Save DC ' + spellSaveDC)
         if (spellAttackMod) spellInfo.push('+' + spellAttackMod + ' to hit')
@@ -6439,13 +6730,19 @@ function buildNPCDetailCard(npc) {
           const isCantrip = fullSpell.level === '0' || fullSpell.level === '' || fullSpell.level === 0 || !fullSpell.level
           const levelDisplay = isCantrip ? 'Cantrip' : 'Level ' + fullSpell.level
           const levelBadge = isCantrip ? 'C' : fullSpell.level
+          const castAtLevel = typeof spell === 'object' && spell.castAtLevel != null ? spell.castAtLevel : null
+          const castAtLevelBadge = castAtLevel != null
+            ? `<span style="font-size:10px;font-weight:700;color:#8fe0e8;background:#1a4a52;
+                      padding:2px 7px;border-radius:10px;margin-left:6px;letter-spacing:.02em;
+                      white-space:nowrap;">Cast at Level ${castAtLevel}</span>`
+            : ''
           return `<div style="margin-bottom:4px;">
               <div onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'"
                 style="background:#0f3460;padding:10px 14px;border-radius:4px;cursor:pointer;
                        display:flex;justify-content:space-between;align-items:center;"
                 onmouseover="this.style.background='#1a4a8a'"
                 onmouseout="this.style.background='#0f3460'">
-                <span style="font-size:13px;color:#e0d5c5;">${prefix}${fullSpell.name}</span>
+                <span style="font-size:13px;color:#e0d5c5;">${prefix}${fullSpell.name}${castAtLevelBadge}</span>
                 <span style="font-size:11px;color:#888;background:#1A1C1E;padding:2px 8px;border-radius:3px;min-width:24px;text-align:center;">
                   ${levelBadge}
                 </span>
@@ -6485,8 +6782,11 @@ function buildNPCDetailCard(npc) {
           ? npc.slots.split(',').filter(s => s.trim()).map(s => parseInt(s.trim()) || 0).slice(1, 10)
           : [])
 
-        const spellSaveDC = npc._draft?.spellSaveDC || npc.spellSaveDC
-        const spellAttackMod = npc._draft?.spellAttackMod || npc.spellAttackMod
+        const manualDC = npc._draft?.spellSaveDC || npc.spellSaveDC
+        const manualAtk = npc._draft?.spellAttackMod || npc.spellAttackMod
+        const derivedDCAtk = manualDC ? null : deriveSpellcastingDCAndAtk(npc.traits, npc.actions)
+        const spellSaveDC = manualDC || derivedDCAtk?.spellSaveDC
+        const spellAttackMod = manualAtk || derivedDCAtk?.spellAttackMod
         const spellInfo = []
         if (spellSaveDC) spellInfo.push('Spell Save DC ' + spellSaveDC)
         if (spellAttackMod) spellInfo.push('+' + spellAttackMod + ' to hit')
@@ -6839,7 +7139,12 @@ function buildPCDetailCard(pc) {
             fullSpell = pc.spells.find(s => s.name === sp.name)
           }
 
-          if (!fullSpell) return `<div style="padding:6px 8px;font-size:13px;color:#888;">${prefix}${sp.name}</div>`
+          const castAtLevelBadge = sp.castAtLevel != null
+            ? `<span style="font-size:10px;font-weight:700;color:#8fe0e8;background:#1a4a52;
+                      padding:2px 7px;border-radius:10px;margin-left:6px;letter-spacing:.02em;
+                      white-space:nowrap;">Cast at Level ${sp.castAtLevel}</span>`
+            : ''
+          if (!fullSpell) return `<div style="padding:6px 8px;font-size:13px;color:#888;">${prefix}${sp.name}${castAtLevelBadge}</div>`
           const id = 'pcspell-' + sp.name.replace(/[^a-zA-Z0-9]/g, '-') + '-' + Math.random().toString(36).slice(2, 7)
           return `
             <div style="margin-bottom:4px;">
@@ -6848,7 +7153,7 @@ function buildPCDetailCard(pc) {
                        display:flex;justify-content:space-between;align-items:center;"
                 onmouseover="this.style.background='#1a4a8a'"
                 onmouseout="this.style.background='#0f3460'">
-                <span style="font-size:13px;color:#e0d5c5;">${prefix}${sp.name}</span>
+                <span style="font-size:13px;color:#e0d5c5;">${prefix}${sp.name}${castAtLevelBadge}</span>
                 <span style="font-size:11px;color:#888;background:#1A1C1E;padding:2px 8px;border-radius:3px;min-width:24px;text-align:center;">
                   ${(fullSpell.level === '0' || fullSpell.level === 0 || !fullSpell.level) ? 'C' : fullSpell.level}
                 </span>
@@ -6885,8 +7190,11 @@ function buildPCDetailCard(pc) {
           spellSlots = pc.slots.split(',').filter(s => s.trim()).map(s => parseInt(s.trim()) || 0).slice(1, 10)
         }
 
-        const spellSaveDC = pc._draft?.spellSaveDC || pc.spellSaveDC
-        const spellAttackMod = pc._draft?.spellAttackMod || pc.spellAttackMod
+        const manualDC = pc._draft?.spellSaveDC || pc.spellSaveDC
+        const manualAtk = pc._draft?.spellAttackMod || pc.spellAttackMod
+        const derivedDCAtk = manualDC ? null : deriveSpellcastingDCAndAtk(pc.traits, pc.actions)
+        const spellSaveDC = manualDC || derivedDCAtk?.spellSaveDC
+        const spellAttackMod = manualAtk || derivedDCAtk?.spellAttackMod
         const spellInfo = []
         if (spellSaveDC) spellInfo.push('Spell Save DC ' + spellSaveDC)
         if (spellAttackMod) spellInfo.push('+' + spellAttackMod + ' to hit')
@@ -7240,7 +7548,7 @@ function showSpell(name, skipHistory = false) {
       ${statRow('Components', s.components)}
       ${statRow('Duration', s.duration)}
       <hr style="border:none;border-top:1px solid #4a9a9a;margin:12px 0;">
-      <p style="line-height:1.7;white-space:pre-wrap;font-size:14px;">${s.text}</p>
+      <p style="line-height:1.7;white-space:pre-wrap;font-size:14px;">${renderMarkdown(s.text)}</p>
       <hr style="border:none;border-top:1px solid #1A1C1E;margin:12px 0;">
       ${statRow('Classes/Subclasses', s.classes)}
       ${(s.source && s.source.length) ? `<div style="font-size:12px;color:#666;margin-top:8px;"><span style="color:#888;font-weight:600;">Source:</span> ${Array.isArray(s.source) ? s.source.join(', ') : s.source}</div>` : ''}
@@ -7909,7 +8217,7 @@ function openAdventure(id, skipHistory = false) {
   content.style.padding = '20px 20px 20px 260px'
   content.scrollTop = 0
 
-  const allNPCs = compendiumData.npcs || []
+  const allNPCs = (compendiumData.npcs || []).filter(n => !n.archived)
   const allEncounters = (enc.list[campaign] || []).map(e => e.id)
 
   content.innerHTML = `
@@ -7959,7 +8267,7 @@ function openAdventure(id, skipHistory = false) {
           ${allNPCs.map(npc => `
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;">
               ${circleToggle('npc-' + npc.uid, (adventure.npcUids || []).includes(npc.uid),
-                `toggleAdventureNPC('${id}', '${npc.uid}', !((compendiumData.campaigns['${campaign}'].adventures['${id}'].npcUids || []).includes('${npc.uid}')))`,
+                `toggleAdventureNPC('${id}', '${npc.uid}', ${!(adventure.npcUids || []).includes(npc.uid)})`,
                 `<span onclick="event.stopPropagation(); showNPC('${npc.uid}')" style="cursor:pointer;">${npc.properName || npc.label || npc.name}</span>`)}
             </div>
           `).join('')}
@@ -8072,6 +8380,11 @@ function toggleAdventureNPC(adventureId, npcUid, checked) {
   }
 
   saveCampaigns(compendiumData.campaigns)
+
+  // The "next checked state" passed as `checked` is baked into the onclick string at
+  // render time (see openAdventure()), so it goes stale after one toggle — re-render
+  // so a second click on the same circle without navigating away computes it fresh.
+  openAdventure(adventureId, true)
 }
 
 function removeAdventureEncounter(adventureId, encounterId) {
@@ -8424,19 +8737,96 @@ function autoLoad() {
           sourceMigratedCount++
         }
       }
+      // One-time migration: XML-imported spells have no dedicated <source> element —
+      // the source line (e.g. "Source: Xanathar's Guide to Everything p. 150") is just
+      // the trailing free-text block, concatenated into spell.text by the XML parser.
+      // Extract it into spell.source (same shape as the monster Source-trait migration
+      // above) and strip it back out of spell.text.
+      //
+      // NOTE: an earlier version of this normalization loop only reshaped spell.source
+      // into an array (defaulting to []) without ever extracting anything — so on any
+      // install that already ran that older code, spell.source is already `[]` for
+      // every XML-imported spell. Guarding on "not yet an array" would never fire again
+      // for that already-normalized data, so the real trigger is "no source recorded yet
+      // AND the text still has an unextracted Source: line."
+      const SPELL_SOURCE_LINE_RE = /\n+\s*Source:\s*([^\n]+)\s*$/i
+      const spellNeedsSourceWork = s => {
+        if (!Array.isArray(s.source)) return true
+        return s.source.length === 0 && SPELL_SOURCE_LINE_RE.test(s.text || '')
+      }
       let spellSourceNormalized = 0
+      let spellSourceExtracted = 0
+      const needsSpellSourceMigration = compendiumData.spells.some(spellNeedsSourceWork)
+      if (needsSpellSourceMigration) {
+        try {
+          saveSnapshot('pre-spell-source-migration', { monsters: compendiumData.monsters, spells: compendiumData.spells })
+        } catch (err) {
+          console.error('Could not save pre-spell-source-migration snapshot:', err)
+        }
+      }
       for (const spell of compendiumData.spells) {
-        if (!Array.isArray(spell.source)) {
-          spell.source = (typeof spell.source === 'string' && spell.source.trim()) ? splitSourceString(spell.source) : []
+        if (spellNeedsSourceWork(spell)) {
+          if (typeof spell.source === 'string' && spell.source.trim()) {
+            spell.source = splitSourceString(spell.source)
+          } else {
+            const match = (spell.text || '').match(SPELL_SOURCE_LINE_RE)
+            if (match) {
+              spell.source = splitSourceString(match[1])
+              spell.text = spell.text.slice(0, match.index).replace(/\s+$/, '')
+              spellSourceExtracted++
+            } else {
+              spell.source = []
+            }
+          }
           spellSourceNormalized++
         }
+      }
+      if (spellSourceExtracted > 0) {
+        console.log(`[Spell Source Migration] Extracted source from ${spellSourceExtracted} spell(s)`)
       }
       if (sourceMigratedCount > 0) {
         console.log(`[Source Migration] Normalized source data on ${sourceMigratedCount} monster(s)`)
       }
 
+      // One-time migration: some monster actions already have a structured `attack`
+      // object (from getBlocks() at XML-import time) whose damage string never encoded
+      // a second "plus X (YdZ) Type damage" clause present in the action's free text
+      // (e.g. Githyanki Dracomancer's "Conjured Dragon's Breath"). getBlocks() now
+      // fills this in for newly-imported monsters, but records already on disk need a
+      // one-time backfill.
+      const ACTION_FIELDS_FOR_DAMAGE_MIGRATION = ['actions', 'bonusActions', 'reactions', 'legendaryActions', 'lairActions']
+      let damageMigratedCount = 0
+      const needsDamageMigration = compendiumData.monsters.some(m =>
+        ACTION_FIELDS_FOR_DAMAGE_MIGRATION.some(field => (m[field] || []).some(a =>
+          !isSpellcastingName(a.name) && a.attack && !a.attack.additionalDiceCount && a.text && extractPlusClause(a.text)
+        ))
+      )
+      if (needsDamageMigration) {
+        try {
+          saveSnapshot('pre-damage-migration', { monsters: compendiumData.monsters, spells: compendiumData.spells })
+        } catch (err) {
+          console.error('Could not save pre-damage-migration snapshot:', err)
+        }
+      }
+      for (const monster of compendiumData.monsters) {
+        for (const field of ACTION_FIELDS_FOR_DAMAGE_MIGRATION) {
+          for (const action of (monster[field] || [])) {
+            if (isSpellcastingName(action.name) || !action.attack || action.attack.additionalDiceCount || !action.text) continue
+            const plusClause = extractPlusClause(action.text)
+            if (!plusClause) continue
+            action.attack.additionalDiceCount = plusClause.diceCount
+            action.attack.additionalDieType = plusClause.dieType
+            action.attack.additionalDmgType = plusClause.dmgType || action.attack.dmgType || ''
+            damageMigratedCount++
+          }
+        }
+      }
+      if (damageMigratedCount > 0) {
+        console.log(`[Damage Migration] Backfilled missing "plus" damage clause on ${damageMigratedCount} action(s)`)
+      }
+
       // Save if either cleanup or migration occurred
-      if (undefinedTagsCleaned > 0 || monstersMigrated > 0 || sourceMigratedCount > 0 || spellSourceNormalized > 0) {
+      if (undefinedTagsCleaned > 0 || monstersMigrated > 0 || sourceMigratedCount > 0 || spellSourceNormalized > 0 || damageMigratedCount > 0) {
         saveCompendium({ monsters: compendiumData.monsters, spells: compendiumData.spells })
       }
     } catch (err) {
