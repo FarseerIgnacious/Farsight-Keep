@@ -271,12 +271,15 @@ function renderSpellPickerScreen() {
           </h2>
         </div>
 
-        <input id="spell-picker-search" type="text" placeholder="Search spells…"
-          value="${sb.spellPickerQuery}"
-          oninput="sb.spellPickerQuery = this.value; sbUpdatePickerResults()"
-          style="width:100%;max-width:500px;padding:8px 12px;margin-bottom:16px;background:#5C5C5C;
-                 border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-                 border-radius:4px;font-size:14px;display:block;" />
+        <div style="position:relative;max-width:500px;margin-bottom:16px;">
+          <input id="spell-picker-search" type="text" placeholder="Search spells…"
+            value="${sb.spellPickerQuery}"
+            oninput="sb.spellPickerQuery = this.value; sbUpdatePickerResults()"
+            style="width:100%;box-sizing:border-box;padding:8px 28px 8px 12px;background:#5C5C5C;
+                   border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
+                   border-radius:4px;font-size:14px;display:block;" />
+          ${window.searchClearBtn('spell-picker-search', "sb.spellPickerQuery='';sbUpdatePickerResults()")}
+        </div>
 
         <div id="spell-picker-results"></div>
       </div>

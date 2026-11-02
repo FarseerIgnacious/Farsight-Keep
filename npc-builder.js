@@ -893,11 +893,13 @@ function npcbRenderForm() {
       ${window.mbCardWrap('CONDITION IMMUNITIES', window.mbRenderConditionImmunities())}
       ${window.mbCardWrap('SENSES', window.mbRenderSenses())}
       ${window.mbCardWrap('LANGUAGES', window.mbRenderLanguages())}
-      ${window.mbCardWrap('TRAITS', `<div id="mb-sect-traits">${window.mbRenderAbilityGroup('traits', false)}</div>`)}
+      ${window.mbCardWrap('TRAITS', `<div id="mb-sect-traits">${window.mbRenderAbilityGroup('traits', true)}</div>`)}
       ${window.mbCardWrap('ACTIONS', `<div id="mb-sect-actions">${window.mbRenderAbilityGroup('actions', true)}</div>`)}
       ${window.mbCardWrap('BONUS ACTIONS', `<div id="mb-sect-bonusActions">${window.mbRenderAbilityGroup('bonusActions', true)}</div>`)}
       ${window.mbCardWrap('REACTIONS', `<div id="mb-sect-reactions">${window.mbRenderAbilityGroup('reactions', true)}</div>`)}
-      ${window.mbCardWrap('LEGENDARY ACTIONS', `<div id="mb-sect-legendaryActions">${window.mbRenderAbilityGroup('legendaryActions', true)}</div>`)}
+      ${window.mbCardWrap('LEGENDARY ACTIONS', `
+        ${window.mbRenderLegendaryActionUsesField()}
+        <div id="mb-sect-legendaryActions">${window.mbRenderAbilityGroup('legendaryActions', true)}</div>`)}
       ${window.mbCardWrap('LAIR ACTIONS', `<div id="mb-sect-lairActions">${window.mbRenderAbilityGroup('lairActions', true)}</div>`)}
       ${window.mbCardWrap('SPELLS', `<div id="mb-sect-Spells">${window.mbRenderSpells()}</div>`)}
       ${npcbRenderNotes()}
@@ -1008,8 +1010,8 @@ function npcbBuildEntry(d) {
   function entryToBlob(e) {
     return {
       name: e.name, text: e.desc,
-      charges: e.limitedUsage.type === 'per_day' ? e.limitedUsage.count : null,
-      chargesCurrent: e.limitedUsage.type === 'per_day' ? e.limitedUsage.count : null,
+      charges: window.isCountBasedLU(e.limitedUsage.type) ? e.limitedUsage.count : null,
+      chargesCurrent: window.isCountBasedLU(e.limitedUsage.type) ? e.limitedUsage.count : null,
       recharge: window.mbRechargeNum ? window.mbRechargeNum(e.limitedUsage) : null,
     }
   }
@@ -1079,10 +1081,11 @@ function npcbBuildEntry(d) {
     passive: d.passive||'',
     languages: d.languages,
     cr: d.cr,
-    traits: (d.traits||[]).map(entryToBlob),
+    traits: (d.traits||[]).map(actionToBlob),
     actions: (d.actions||[]).map(actionToBlob),
     reactions: (d.reactions||[]).map(entryToBlob),
     legendaryActions: (d.legendaryActions||[]).map(actionToBlob),
+    legendaryActionUses: d.legendaryActionUses ? parseInt(d.legendaryActionUses) || null : null,
     lairActions: (d.lairActions||[]).map(actionToBlob),
     bonusActions: (d.bonusActions||[]).map(entryToBlob),
     spellSlots: d.spellSlots||[0,0,0,0,0,0,0,0,0],
@@ -1102,6 +1105,16 @@ function npcbSave() {
   const d = npcb.draft
   if (!d.name || !d.name.trim()) {
     showToast('Please enter a stat block name.')
+    return
+  }
+
+  const effectiveName = (d.properName || d.name).trim()
+  const dupe = compendiumData.npcs.find(n =>
+    n.uid !== npcb.originalUid &&
+    (n.properName || n.name || '').trim().toLowerCase() === effectiveName.toLowerCase()
+  )
+  if (dupe) {
+    showToast(`An NPC named "${dupe.properName || dupe.name}" already exists — rename before saving.`)
     return
   }
 

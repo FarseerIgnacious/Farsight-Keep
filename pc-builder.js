@@ -603,7 +603,7 @@ function pcbRenderForm() {
       ${window.mbCardWrap('CONDITION IMMUNITIES', window.mbRenderConditionImmunities())}
       ${window.mbCardWrap('SENSES & PASSIVE SENSES', pcbRenderSenses())}
       ${window.mbCardWrap('LANGUAGES', window.mbRenderLanguages())}
-      ${window.mbCardWrap('TRAITS', `<div id="mb-sect-traits">${window.mbRenderAbilityGroup('traits', false)}</div>`)}
+      ${window.mbCardWrap('TRAITS', `<div id="mb-sect-traits">${window.mbRenderAbilityGroup('traits', true)}</div>`)}
       ${window.mbCardWrap('ACTIONS', `<div id="mb-sect-actions">${window.mbRenderAbilityGroup('actions', true)}</div>`)}
       ${window.mbCardWrap('BONUS ACTIONS', `<div id="mb-sect-bonusActions">${window.mbRenderAbilityGroup('bonusActions', true)}</div>`)}
       ${window.mbCardWrap('REACTIONS', `<div id="mb-sect-reactions">${window.mbRenderAbilityGroup('reactions', true)}</div>`)}
@@ -1053,6 +1053,16 @@ function pcbSave() {
     return
   }
 
+  const trimmedName = d.name.trim()
+  const dupe = (compendiumData.players || []).find(p =>
+    p.uid !== pcb.originalUid &&
+    (p.label || p.name || '').trim().toLowerCase() === trimmedName.toLowerCase()
+  )
+  if (dupe) {
+    showToast(`A character named "${dupe.label || dupe.name}" already exists in this campaign — rename before saving.`)
+    return
+  }
+
   // Normalize traits to use charges/chargesCurrent/recharge instead of limitedUsage
   const normalizedTraits = (d.traits || []).map(t => {
     if (t.limitedUsage) {
@@ -1066,7 +1076,7 @@ function pcbSave() {
         if (match) recharge = parseInt(match[1])
       }
 
-      const charges = lu.type === 'per_day' || lu.type === 'charges' ? (lu.count || null) : null
+      const charges = window.isCountBasedLU(lu.type) ? (lu.count || null) : null
 
       return {
         ...t,
@@ -1091,7 +1101,7 @@ function pcbSave() {
         if (match) recharge = parseInt(match[1])
       }
 
-      const charges = lu.type === 'per_day' || lu.type === 'charges' ? (lu.count || null) : null
+      const charges = window.isCountBasedLU(lu.type) ? (lu.count || null) : null
 
       return {
         ...a,
@@ -1136,6 +1146,18 @@ function pcbSave() {
     compendiumData.players[idx] = pc
   } else {
     compendiumData.players.push(pc)
+  }
+
+  // Re-link the campaign's players/npcs arrays to the in-memory ones in case
+  // they'd become disconnected (e.g. a freshly created campaign), matching
+  // the re-sync npcbSave() already does. Without this, pushes above can land
+  // in a detached array that never reaches disk.
+  if (compendiumData.activeCampaign && compendiumData.campaigns) {
+    compendiumData.campaigns[compendiumData.activeCampaign] = {
+      ...compendiumData.campaigns[compendiumData.activeCampaign],
+      players: compendiumData.players,
+      npcs: compendiumData.npcs
+    }
   }
 
   saveCampaigns(compendiumData.campaigns)

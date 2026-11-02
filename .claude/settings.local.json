@@ -120,7 +120,10 @@
       "Bash(git tag *)",
       "Bash(xargs -I{} sh -c 'echo {}: $\\(wc -l < {}\\)')",
       "Bash(sort -t: -k2 -n -r)",
-      "Bash(find '/Users/caleb/Library/Application Support' -iname *compendium*)"
+      "Bash(find '/Users/caleb/Library/Application Support' -iname *compendium*)",
+      "Bash(python3 -)",
+      "Bash(python3 -c ' *)",
+      "Bash(ps -p 8838 -o lstart=)"
     ]
   }
 }

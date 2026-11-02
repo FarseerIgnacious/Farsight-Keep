@@ -167,6 +167,7 @@ let enc = {
   notesOpen: false,
   monsterQ: '',
   filteredMonsters: [],
+  savedSnapshot: null, // JSON snapshot of the last-loaded/last-saved encounter state, for dirty-checking
 }
 
 const SKILL_NAMES = {
@@ -780,6 +781,18 @@ function recoverAttackData(item) {
   }
 }
 
+// Small "X" clear button for a search input, absolutely positioned at its right edge.
+// `inputId` is cleared directly (partial re-renders on search often don't touch the
+// input's own DOM value) and `clearExpr` is whatever JS re-applies the now-empty query.
+function searchClearBtn(inputId, clearExpr) {
+  return `
+    <button type="button" title="Clear"
+      onclick="document.getElementById('${inputId}').value='';${clearExpr};document.getElementById('${inputId}').focus()"
+      style="position:absolute;right:6px;top:50%;transform:translateY(-50%);
+             background:none;border:none;color:#888;cursor:pointer;font-size:16px;
+             line-height:1;padding:2px 4px;">&times;</button>`
+}
+
 function abilityMod(score) {
   const num = parseInt(score)
   return isNaN(num) ? 0 : Math.floor((num - 10) / 2)
@@ -787,6 +800,16 @@ function abilityMod(score) {
 
 function modStr(mod) {
   return mod >= 0 ? `+${mod}` : `${mod}`
+}
+
+// Builder entries (monster/NPC/PC) store an editable initiativeBonus that may
+// have been manually overridden away from the raw DEX modifier - always prefer
+// it over recomputing from DEX.
+function resolveInitiativeBonus(entity, dexScore) {
+  if (entity && entity.initiativeBonus !== undefined && entity.initiativeBonus !== null) {
+    return parseInt(entity.initiativeBonus) || 0
+  }
+  return abilityMod(dexScore)
 }
 
 // ── HTML Helpers ──────────────────────────────────────────────────
@@ -1973,7 +1996,7 @@ function showDeleteCampaignModal() {
         style="width:100%;box-sizing:border-box;background:#262F35;border:1px solid #8b0000;
                color:#e0d5c5;padding:10px 12px;border-radius:4px;font-family:var(--app-font);
                font-size:14px;margin-bottom:16px;"
-        oninput="document.getElementById('delete-campaign-confirm-btn').disabled = (this.value !== '${campaignName}')" />
+        oninput="document.getElementById('delete-campaign-confirm-btn').disabled = (this.value !== '${campaignName.replace(/'/g, "\\'")}')" />
 
       <div style="display:flex;gap:12px;justify-content:flex-end;">
         <button onclick="document.getElementById('delete-campaign-modal').remove()"
@@ -1981,7 +2004,7 @@ function showDeleteCampaignModal() {
                  cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:14px;">
           Cancel
         </button>
-        <button id="delete-campaign-confirm-btn" onclick="confirmDeleteCampaign('${campaignName}')" disabled
+        <button id="delete-campaign-confirm-btn" onclick="confirmDeleteCampaign('${campaignName.replace(/'/g, "\\'")}')" disabled
           style="background:#8b0000;border:none;color:#e0d5c5;padding:8px 24px;
                  cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:14px;
                  opacity:0.5;"
@@ -2635,12 +2658,33 @@ function updateNavBar() {
   // Nav buttons are now styled purely by their images, no dynamic styling needed
 }
 
-// ── Unsaved-changes guard (Monster/NPC/PC/Spell builders share this check) ──
+// Encounter builder has no single "draft" object like the other builders, and
+// mutates enc.current/enc.inCombat/enc.turn/enc.round through ~20+ scattered
+// functions (add/remove combatant, HP, conditions, charges, spell slots, etc.) -
+// rather than adding a dirty=true line to every one of them, compare the current
+// state against a snapshot taken on load/new/save. Catches any mutation path,
+// including future ones, for free.
+function captureEncSnapshot() {
+  enc.savedSnapshot = enc.current
+    ? JSON.stringify({ name: enc.current.name, combatants: enc.current.combatants, inCombat: enc.inCombat, turn: enc.turn, round: enc.round })
+    : null
+}
+window.captureEncSnapshot = captureEncSnapshot
+
+function isEncounterDirty() {
+  if (!enc.current) return false
+  const currentSnapshot = JSON.stringify({ name: enc.current.name, combatants: enc.current.combatants, inCombat: enc.inCombat, turn: enc.turn, round: enc.round })
+  return currentSnapshot !== enc.savedSnapshot
+}
+window.isEncounterDirty = isEncounterDirty
+
+// ── Unsaved-changes guard (Monster/NPC/PC/Spell builders + Encounter builder share this check) ──
 function anyBuilderDirty() {
   return !!(typeof mb !== 'undefined' && mb && mb.dirty) ||
          !!(typeof npcb !== 'undefined' && npcb && npcb.dirty) ||
          !!(typeof pcb !== 'undefined' && pcb && pcb.dirty) ||
-         !!(typeof sb !== 'undefined' && sb && sb.dirty)
+         !!(typeof sb !== 'undefined' && sb && sb.dirty) ||
+         isEncounterDirty()
 }
 window.anyBuilderDirty = anyBuilderDirty
 
@@ -2649,6 +2693,10 @@ function discardAllBuilderDrafts() {
   if (typeof npcb !== 'undefined' && npcb) { npcb.draft = null; npcb.dirty = false }
   if (typeof pcb !== 'undefined' && pcb) { pcb.draft = null; pcb.dirty = false }
   if (typeof sb !== 'undefined' && sb) { sb.dirty = false }
+  // Not persisted, so there's nothing to roll back on disk - just resync the
+  // baseline so the dirty check stops firing. Re-entering this same encounter
+  // later reloads it fresh from storage (runEncounter), discarding these edits.
+  captureEncSnapshot()
 }
 window.discardAllBuilderDrafts = discardAllBuilderDrafts
 
@@ -2752,7 +2800,8 @@ function showSection(section, skipHistory = false) {
       thirdParty: '',
       environment: [],
       spellcaster: '',
-      source: []
+      source: [],
+      tag: []
     }
     filterTagPickerOpen = null
     filterTagPickerQuery = ''
@@ -3094,6 +3143,7 @@ function calculateEncounterDifficulty(encounter) {
 function openNewEncounter() {
   enc.current = { id: 'enc_' + Date.now(), name: 'New Encounter', combatants: [] }
   enc.inCombat = false; enc.turn = 0; enc.round = 1; enc.addOpen = false; enc.monsterQ = ''
+  captureEncSnapshot()
   enterEncounterBuilder()
 }
 
@@ -3154,6 +3204,7 @@ function runEncounter(id) {
   }
 
   enc.addOpen = false; enc.monsterQ = ''
+  captureEncSnapshot()
   enterEncounterBuilder()
 }
 
@@ -3190,6 +3241,41 @@ function enterEncounterBuilder() {
   }, 0)
 }
 
+// The encounter builder's own in-page "← Campaign" button, mirroring mbBack()'s
+// pattern for the Monster/NPC/PC/Spell builders' own Back buttons - the persistent
+// top-nav guard (guardedShowSection/anyBuilderDirty) doesn't cover this because it's
+// an in-page button, not a nav-bar one.
+function encBack() {
+  if (!isEncounterDirty()) { popNav(); return }
+  const overlay = document.createElement('div')
+  overlay.id = 'enc-discard-overlay'
+  overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:1000;
+    display:flex;align-items:center;justify-content:center;`
+  overlay.innerHTML = `
+    <div style="background:#262F35;border:2px solid #8b0000;border-radius:8px;
+                padding:28px 32px;max-width:340px;text-align:center;font-family:var(--app-font);">
+      <div style="font-size:16px;font-weight:bold;color:#e0d5c5;margin-bottom:10px;">Discard Changes?</div>
+      <div style="color:#C8C8C8;font-size:13px;margin-bottom:22px;line-height:1.6;">
+        You have unsaved changes that will be lost.
+      </div>
+      <div style="display:flex;gap:10px;justify-content:center;">
+        <button onclick="document.getElementById('enc-discard-overlay').remove();discardAllBuilderDrafts();popNav()"
+          style="background:#8b0000;color:#e0d5c5;border:none;padding:8px 20px;
+                 cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+          Discard
+        </button>
+        <button onclick="document.getElementById('enc-discard-overlay').remove()"
+          style="background:none;border:1px solid #2E2F2D;color:#C8C8C8;padding:8px 20px;
+                 cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:13px;">
+          Keep Editing
+        </button>
+      </div>
+    </div>
+  `
+  document.body.appendChild(overlay)
+}
+window.encBack = encBack
+
 // ── Encounter Builder ─────────────────────────────────────────────
 function renderEncounterBuilder(container) {
   container.innerHTML = `
@@ -3201,7 +3287,7 @@ function renderEncounterBuilder(container) {
         style="display:flex;align-items:center;gap:12px;
                padding:16px 20px 12px 20px;background:#5C5C5C;border-bottom:4px solid #2E2F2D;
                flex-shrink:0;padding-left:240px;box-sizing:border-box;">
-        <button onclick="popNav()"
+        <button onclick="encBack()"
           style="background:#3E3E3D;border:4px solid #2E2F2D;color:#C8C8C8;padding:5px 12px;
                  cursor:pointer;border-radius:4px;font-family:var(--app-font);font-size:12px;
                  white-space:nowrap;">
@@ -3519,18 +3605,33 @@ function buildCard(c, isActive) {
 
   function abilityBlock(label, items, section) {
     if (!items || items.length === 0) return ''
+    const legendaryUsesHTML = (section === 'legendaryActions' && c.legendaryActionUses) ? `
+      <div style="display:flex;align-items:center;gap:3px;flex-shrink:0;">
+        <button onclick="adjustLegendaryActionUses('${c.uid}',-1)"
+          style="background:#0f3460;border:none;color:#e0d5c5;width:22px;height:22px;
+                 cursor:pointer;border-radius:3px;font-size:14px;line-height:1;
+                 padding:0;display:flex;align-items:center;justify-content:center;">-</button>
+        <span style="font-size:12px;color:#aaa;min-width:36px;text-align:center;">
+          ${c.legendaryActionUsesCurrent ?? c.legendaryActionUses}/${c.legendaryActionUses}</span>
+        <button onclick="adjustLegendaryActionUses('${c.uid}',1)"
+          style="background:#0f3460;border:none;color:#e0d5c5;width:22px;height:22px;
+                 cursor:pointer;border-radius:3px;font-size:14px;line-height:1;
+                 padding:0;display:flex;align-items:center;justify-content:center;">+</button>
+      </div>` : ''
     return `
       <div style="margin-top:12px;">
-        <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
-                    margin-bottom:6px;">${label}</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+          <div style="font-size:12px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;">${label}</div>
+          ${legendaryUsesHTML}
+        </div>
         ${items.map((item, idx) => {
           const text = item.text || ''
           const long = text.length > 120 || text.includes('\n')
           const tid = `trait-${c.uid}-${section}-${idx}`
 
           // Fallback: if charges is undefined/null, try reading from limitedUsage
-          const charges = item.charges ?? (item.limitedUsage?.type === 'per_day' || item.limitedUsage?.type === 'charges' ? item.limitedUsage.count : null)
-          const chargesCurrent = item.chargesCurrent ?? (item.limitedUsage?.type === 'per_day' || item.limitedUsage?.type === 'charges' ? item.limitedUsage.count : null)
+          const charges = item.charges ?? (isCountBasedLU(item.limitedUsage?.type) ? item.limitedUsage.count : null)
+          const chargesCurrent = item.chargesCurrent ?? (isCountBasedLU(item.limitedUsage?.type) ? item.limitedUsage.count : null)
 
           // Extract recharge with fallback
           let recharge = item.recharge
@@ -3756,6 +3857,7 @@ function buildCard(c, isActive) {
                   padding:2px 7px;border-radius:10px;margin-left:6px;letter-spacing:.02em;
                   white-space:nowrap;flex-shrink:0;">Cast at Level ${s.castAtLevel}</span>`
         : ''
+      const caveatText = s.caveat ? ` <span style="font-weight:normal;color:#888;">(${s.caveat})</span>` : ''
 
       if (s.atWill) {
         return `
@@ -3765,7 +3867,7 @@ function buildCard(c, isActive) {
                      ${rowBg}padding:6px 10px;cursor:pointer;"
               onmouseover="this.style.background='#142840'"
               onmouseout="this.style.background='#0f1e30'">
-              <span style="${nameStyle}">${s.name}</span>${castAtLevelBadge}
+              <span style="${nameStyle}">${s.name}${caveatText}</span>${castAtLevelBadge}
               <span style="font-size:11px;color:#C0C0C0;flex-shrink:0;margin-left:6px;">At will</span>
             </div>
             ${spellDetail(s, lvl)}
@@ -3794,7 +3896,7 @@ function buildCard(c, isActive) {
               <div onclick="toggleCombatantSpell('${c.uid}',${s.idx})"
                 style="display:flex;align-items:center;gap:5px;flex:1;min-width:0;
                        cursor:pointer;padding:2px 8px;">
-                <span style="${nameStyle}">${s.name}</span>${castAtLevelBadge}
+                <span style="${nameStyle}">${s.name}${caveatText}</span>${castAtLevelBadge}
                 <span id="cspell-arrow-${c.uid}-${s.idx}"
                   style="font-size:11px;color:#555;flex-shrink:0;">▼</span>
               </div>
@@ -3818,7 +3920,7 @@ function buildCard(c, isActive) {
                    ${rowBg}padding:6px 10px;cursor:pointer;"
             onmouseover="this.style.background='#142840'"
             onmouseout="this.style.background='#0f1e30'">
-            <span style="${nameStyle}">${s.name}</span>${castAtLevelBadge}
+            <span style="${nameStyle}">${s.name}${caveatText}</span>${castAtLevelBadge}
             <span id="cspell-arrow-${c.uid}-${s.idx}"
               style="font-size:11px;color:#555;flex-shrink:0;margin-left:6px;">▼</span>
           </div>
@@ -3918,6 +4020,9 @@ function buildCard(c, isActive) {
                      font-size:18px;font-weight:bold;width:100%;text-align:center;outline:none;
                      padding:0;margin:0;-moz-appearance:textfield;
                      -webkit-appearance:none;appearance:none;box-sizing:border-box;" />
+            ${c.initiativeBonus !== undefined && c.initiativeBonus !== null ? `
+              <div style="font-size:10px;color:#888;margin-top:2px;">(${modStr(c.initiativeBonus)})</div>
+            ` : ''}
           </div>
         </div>
         <div style="display:flex;clip-path:polygon(0% 0%, 100% 0%, 100% 65%, 50% 100%, 0% 65%);
@@ -4373,11 +4478,14 @@ function renderAddPanel() {
       <div style="margin-bottom:16px;">
         <div style="font-size:10px;color:#7B9BA8;letter-spacing:.06em;
                     margin-bottom:6px;font-weight:700;">MONSTERS</div>
-        <input type="text" placeholder="Search monsters…" value="${enc.monsterQ}"
-          oninput="filterEncMonsters(this.value)"
-          style="width:100%;padding:6px 10px;background:#5C5C5C;border:4px solid #2E2F2D;
-                 color:#1E231A;font-family:var(--app-font);border-radius:3px;font-size:12px;
-                 margin-bottom:6px;box-sizing:border-box;" />
+        <div style="position:relative;margin-bottom:6px;">
+          <input id="enc-monster-search" type="text" placeholder="Search monsters…" value="${enc.monsterQ}"
+            oninput="filterEncMonsters(this.value)"
+            style="width:100%;padding:6px 26px 6px 10px;background:#5C5C5C;border:4px solid #2E2F2D;
+                   color:#1E231A;font-family:var(--app-font);border-radius:3px;font-size:12px;
+                   box-sizing:border-box;" />
+          ${searchClearBtn('enc-monster-search', "filterEncMonsters('')")}
+        </div>
         <div id="enc-monster-list" style="max-height:260px;overflow-y:auto;">
           ${filtered.length === 0
             ? '<p style="color:#444;font-size:12px;">No results</p>'
@@ -4647,7 +4755,7 @@ function addFromPC(uid) {
     // Fall back to limitedUsage if charges not present
     if (charges === null && t.limitedUsage) {
       const lu = t.limitedUsage
-      if (lu.type === 'per_day' || lu.type === 'charges') {
+      if (isCountBasedLU(lu.type)) {
         charges = lu.count || null
         chargesCurrent = lu.count || null
       }
@@ -4684,6 +4792,10 @@ function addFromPC(uid) {
     isEnemy: false,
     level: pc.level || 1,
     initiative: 0,
+    initiativeBonus: resolveInitiativeBonus(
+      { initiativeBonus: pc.initiativeBonus ?? pc._draft?.initiativeBonus },
+      parseInt(abilities[1]) || 10
+    ),
     ac: ac,
     speed: pc.speed,
     hpMax: hpMax,
@@ -4698,6 +4810,12 @@ function addFromPC(uid) {
     cha: parseInt(abilities[5]) || 10,
     conditions: [],
     abilities: abilities,
+    // Snapshot of the PC's identity stats (hpMax/ac/abilities) at the moment they were
+    // pulled in. The per-launch encounter sync compares the PC's CURRENT stats against
+    // this baseline (not against this combatant's current values) to tell "the PC sheet
+    // changed, propagate it" apart from "this combatant was deliberately customized for
+    // this encounter, leave it alone" - see autoLoad()'s encounter migration.
+    _syncedFrom: JSON.stringify({ hpMax, ac, abilities }),
     traits: pcTraits,
     actions: (pc.actions || []).map(a => {
       // Copy charges/chargesCurrent directly if present (PC Builder format)
@@ -4708,7 +4826,7 @@ function addFromPC(uid) {
       // Fall back to limitedUsage if charges not present
       if (charges === null && a.limitedUsage) {
         const lu = a.limitedUsage
-        if (lu.type === 'per_day' || lu.type === 'charges') {
+        if (isCountBasedLU(lu.type)) {
           charges = lu.count || null
           chargesCurrent = lu.count || null
         }
@@ -4793,6 +4911,7 @@ function addFromNPC(uid) {
     isEnemy: true,
     cr: npc.cr || '0',
     initiative: initRoll,
+    initiativeBonus: resolveInitiativeBonus(npc, parseInt(abilities[1]) || parseInt(npc.dex) || 10),
     ac: npc.ac,
     speed: npc.speed,
     hpMax: parseInt(npc.hpMax) || 1,
@@ -4811,6 +4930,8 @@ function addFromNPC(uid) {
     bonusActions: mapActionsForCombatant(npc.bonusActions),
     reactions: mapActionsForCombatant(npc.reactions),
     legendaryActions: mapActionsForCombatant(npc.legendaryActions),
+    legendaryActionUses: npc.legendaryActionUses || null,
+    legendaryActionUsesCurrent: npc.legendaryActionUses || null,
     lairs: mapActionsForCombatant(npc.lairActions),
     spellSlots,
     dailySpells: parseDailySpells(npcTraits),
@@ -4967,6 +5088,7 @@ function addMonsterAsIs(name) {
     isEnemy: true,
     cr: m.cr || '0',
     initiative: initRoll,
+    initiativeBonus: resolveInitiativeBonus(m, parseInt(m.dex) || 10),
     ac: m.ac,
     speed: m.speed,
     hpMax: hpNum,
@@ -4986,6 +5108,8 @@ function addMonsterAsIs(name) {
     bonusActions: mapActionsForCombatant(m.bonusActions),
     reactions: mapActionsForCombatant(m.reactions),
     legendaryActions: mapActionsForCombatant(m.legendaryActions),
+    legendaryActionUses: m.legendaryActionUses || null,
+    legendaryActionUsesCurrent: m.legendaryActionUses || null,
     lairs: mapActionsForCombatant(m.lairActions),
     spellSlots,
     dailySpells: parseDailySpells(traits),
@@ -5177,6 +5301,13 @@ function adjustCharge(uid, section, index, delta) {
   if (item.charges !== null) {
     item.chargesCurrent = Math.max(0, Math.min(item.charges, (item.chargesCurrent || 0) + delta))
   }
+  refreshCards()
+}
+
+function adjustLegendaryActionUses(uid, delta) {
+  const c = enc.current?.combatants.find(x => x.uid === uid)
+  if (!c || !c.legendaryActionUses) return
+  c.legendaryActionUsesCurrent = Math.max(0, Math.min(c.legendaryActionUses, (c.legendaryActionUsesCurrent ?? c.legendaryActionUses) + delta))
   refreshCards()
 }
 
@@ -5460,14 +5591,26 @@ function parseMonsterSpells(spellsText, traits, actions) {
   return spells.length ? spells : null
 }
 
-// Extracts "(spell save DC 19, +11 to hit with spell attacks)" or "(spell save DC 21)"
-// (no to-hit clause when no spell in the list needs an attack roll) from a
-// Spellcasting/Innate Spellcasting trait or action's free text.
+// Extracts "(spell save DC 19, +11 to hit with spell attacks)", "(spell save DC 21)",
+// or the no-"spell"-prefix variant some stat blocks use instead - "(save DC 17)" /
+// "ability is Wisdom (save DC 12, +4 to hit with spell attacks)" - plus the "spell
+// save DC DC 15" doubled-DC typo some imported text carries. From a Spellcasting/
+// Innate Spellcasting trait or action's free text.
 function parseSpellcastingDCAndAtk(text) {
   if (!text) return { spellSaveDC: null, spellAttackMod: null }
-  const m = text.match(/spell save DC\s*(\d+)(?:\s*,\s*\+(\d+)\s*to hit with spell attacks)?/i)
+  const m = text.match(/(?:spell\s+)?save\s*DC\s*(?:DC\s*)?(\d+)(?:\s*,\s*\+(\d+)\s*to hit with spell attacks)?/i)
   if (!m) return { spellSaveDC: null, spellAttackMod: null }
   return { spellSaveDC: parseInt(m[1], 10), spellAttackMod: m[2] != null ? parseInt(m[2], 10) : null }
+}
+
+// A name containing "innate" alone (without "spellcasting") isn't enough evidence on
+// its own - a future homebrew "Innate Resistance" or similar could otherwise have an
+// unrelated save DC in its text misread as a spellcasting DC. Require actual evidence
+// of spells: either the entry is specifically named "Spellcasting", or its text uses
+// spell-list language.
+function looksLikeSpellcastingText(text) {
+  return /\bspells?\b/i.test(text) || /\bcantrips?\b/i.test(text) ||
+         /\bat will\b/i.test(text) || /\d+\/day/i.test(text) || /\bslots?\b/i.test(text)
 }
 
 // Scans traits+actions for the first Spellcasting/Innate entry and derives DC/ATK from
@@ -5475,8 +5618,10 @@ function parseSpellcastingDCAndAtk(text) {
 // free-text monsters/NPCs that never had the manual fields populated.
 function deriveSpellcastingDCAndAtk(traits, actions) {
   for (const e of [...(traits || []), ...(actions || [])]) {
-    if (!/spellcast|innate/i.test(e.name || '')) continue
-    const result = parseSpellcastingDCAndAtk(e.text || e.desc || '')
+    const name = e.name || ''
+    const text = e.text || e.desc || ''
+    if (!/spellcasting/i.test(name) && !looksLikeSpellcastingText(text)) continue
+    const result = parseSpellcastingDCAndAtk(text)
     if (result.spellSaveDC != null) return result
   }
   return { spellSaveDC: null, spellAttackMod: null }
@@ -5527,6 +5672,7 @@ function saveEncounterPrompt() {
   if (idx !== -1) enc.list[campaign][idx] = saved
   else enc.list[campaign].push(saved)
   saveEncounters(enc.list)
+  captureEncSnapshot()
   showToast(`"${enc.current.name}" saved`)
 }
 
@@ -5623,8 +5769,11 @@ function createNewCampaign() {
 
   // Set as active campaign
   compendiumData.activeCampaign = name
-  compendiumData.players = []
-  compendiumData.npcs = []
+  // Alias to the SAME arrays stored on the campaign object (not fresh []
+  // literals) so pushes to compendiumData.players/npcs during this session
+  // actually land in what gets persisted.
+  compendiumData.players = compendiumData.campaigns[name].players
+  compendiumData.npcs = compendiumData.campaigns[name].npcs
 
   // Save to storage
   saveCampaigns(compendiumData.campaigns)
@@ -5775,7 +5924,8 @@ let monsterFilters = {
   thirdParty: '',
   environment: [],
   spellcaster: '',
-  source: []
+  source: [],
+  tag: []
 }
 
 // ── Multi-select filter tag pickers (Environment / Source, Monsters + Spells tabs) ──
@@ -5815,6 +5965,17 @@ function monsterUniqueTypes() {
   )].sort()
 }
 
+// The monster "tag" field holds comma-separated custom tags (e.g. "Demon, Wizard,
+// Darklord") - split each monster's string into its individual trimmed tags before
+// deduping, so "Demon, Wizard, Darklord" becomes three separate selectable options.
+function monsterUniqueTags() {
+  return [...new Set(compendiumData.monsters
+    .flatMap(m => (m.tag || '').split(','))
+    .map(t => t.trim())
+    .filter(Boolean)
+  )].sort()
+}
+
 function filterTagKindConfig(kind) {
   switch (kind) {
     case 'monster-cr':
@@ -5847,6 +6008,13 @@ function filterTagKindConfig(kind) {
           opts.push('No Source')
           return opts
         },
+        apply: applyMonsterFilters,
+      }
+    case 'monster-tag':
+      return {
+        label: 'Tag',
+        getSelected: () => monsterFilters.tag,
+        getOptions: monsterUniqueTags,
         apply: applyMonsterFilters,
       }
     case 'spell-source':
@@ -5896,7 +6064,7 @@ function spellUniqueSchools() {
 }
 
 function refreshAllFilterTagPickers() {
-  ['monster-cr', 'monster-type', 'monster-environment', 'monster-source', 'spell-level', 'spell-school', 'spell-source'].forEach(kind => {
+  ['monster-cr', 'monster-type', 'monster-environment', 'monster-source', 'monster-tag', 'spell-level', 'spell-school', 'spell-source'].forEach(kind => {
     const el = document.getElementById('filter-tagpicker-' + kind)
     if (el) el.innerHTML = renderFilterTagPickerInner(kind)
   })
@@ -5994,7 +6162,7 @@ function renderFilterTagPickerInner(kind) {
 }
 
 function renderActiveFilterChipsHtml(tab) {
-  const kinds = tab === 'monster' ? ['monster-cr', 'monster-type', 'monster-environment', 'monster-source'] : ['spell-level', 'spell-school', 'spell-source']
+  const kinds = tab === 'monster' ? ['monster-cr', 'monster-type', 'monster-environment', 'monster-source', 'monster-tag'] : ['spell-level', 'spell-school', 'spell-source']
   const chips = []
   kinds.forEach(kind => {
     filterTagKindConfig(kind).getSelected().forEach(val => chips.push({ kind, val }))
@@ -6016,15 +6184,18 @@ function renderActiveFilterChipsHtml(tab) {
 function renderMonsters(container) {
   const hasActiveFilters = monsterFilters.query || monsterFilters.cr.length > 0 || monsterFilters.type.length > 0 ||
     monsterFilters.homebrew || monsterFilters.thirdParty || monsterFilters.environment.length > 0 ||
-    monsterFilters.spellcaster || monsterFilters.source.length > 0
+    monsterFilters.spellcaster || monsterFilters.source.length > 0 || monsterFilters.tag.length > 0
 
   container.innerHTML = `
     <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;">
-      <input id="monster-search" type="text" placeholder="Search monsters…" value="${monsterFilters.query}"
-        style="flex:1;max-width:500px;padding:8px 12px;background:#5C5C5C;
-               border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-               border-radius:4px;font-size:14px;"
-        oninput="monsterFilters.query=this.value;applyMonsterFilters()" />
+      <div style="position:relative;flex:1;max-width:500px;">
+        <input id="monster-search" type="text" placeholder="Search monsters…" value="${monsterFilters.query}"
+          style="width:100%;box-sizing:border-box;padding:8px 28px 8px 12px;background:#5C5C5C;
+                 border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
+                 border-radius:4px;font-size:14px;"
+          oninput="monsterFilters.query=this.value;applyMonsterFilters()" />
+        ${searchClearBtn('monster-search', "monsterFilters.query='';applyMonsterFilters()")}
+      </div>
       <button onclick="openMonsterBuilder(null)"
         style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:8px 16px;
                cursor:pointer;border-radius:4px;font-size:13px;font-family:var(--app-font);
@@ -6041,6 +6212,7 @@ function renderMonsters(container) {
         <div id="filter-tagpicker-monster-type">${renderFilterTagPickerInner('monster-type')}</div>
         <div id="filter-tagpicker-monster-environment">${renderFilterTagPickerInner('monster-environment')}</div>
         <div id="filter-tagpicker-monster-source">${renderFilterTagPickerInner('monster-source')}</div>
+        <div id="filter-tagpicker-monster-tag">${renderFilterTagPickerInner('monster-tag')}</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
         ${threeStateToggle('homebrew', 'Homebrew')}
@@ -6131,6 +6303,14 @@ function applyMonsterFilters() {
     })
   }
 
+  // Tag filter (OR across selected tags; m.tag is a comma-separated string)
+  if (monsterFilters.tag.length > 0) {
+    filtered = filtered.filter(m => {
+      const tags = (m.tag || '').split(',').map(t => t.trim()).filter(Boolean)
+      return monsterFilters.tag.some(sel => tags.includes(sel))
+    })
+  }
+
   // Spellcaster filter
   if (monsterFilters.spellcaster === 'spellcaster') {
     filtered = filtered.filter(m => {
@@ -6161,7 +6341,7 @@ function applyMonsterFilters() {
     const hasActive = monsterFilters.query || monsterFilters.cr.length > 0 ||
       monsterFilters.type.length > 0 || monsterFilters.homebrew ||
       monsterFilters.thirdParty || monsterFilters.environment.length > 0 ||
-      monsterFilters.spellcaster || monsterFilters.source.length > 0
+      monsterFilters.spellcaster || monsterFilters.source.length > 0 || monsterFilters.tag.length > 0
     clearBtn.style.opacity = hasActive ? '1' : '0.4'
     clearBtn.style.pointerEvents = hasActive ? 'auto' : 'none'
     clearBtn.style.cursor = hasActive ? 'pointer' : 'not-allowed'
@@ -6177,7 +6357,8 @@ function clearMonsterFilters() {
     thirdParty: '',
     environment: [],
     spellcaster: '',
-    source: []
+    source: [],
+    tag: []
   }
   filterTagPickerOpen = null
   filterTagPickerQuery = ''
@@ -6261,7 +6442,7 @@ function showMonster(name, skipHistory = false) {
 // since stat blocks are read-only.
 function statBlockUsageStr(item) {
   if (!item) return ''
-  const charges = item.charges ?? (item.limitedUsage?.type === 'per_day' || item.limitedUsage?.type === 'charges' ? item.limitedUsage.count : null)
+  const charges = item.charges ?? (isCountBasedLU(item.limitedUsage?.type) ? item.limitedUsage.count : null)
   if (charges !== null && charges !== undefined) return ` (${charges}/${charges} uses)`
 
   let recharge = item.recharge
@@ -6350,11 +6531,7 @@ function buildMonsterDetailCard(m) {
         <div style="background:#1A1C1E;padding:8px;border-radius:4px;text-align:center;">
           <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                       margin-bottom:3px;">INITIATIVE</div>
-          <div style="font-size:20px;font-weight:bold;">${(() => {
-            const dex = parseInt(m.dex) || 10
-            const initMod = Math.floor((dex - 10) / 2)
-            return initMod >= 0 ? '+' + initMod : initMod
-          })()}</div>
+          <div style="font-size:20px;font-weight:bold;">${modStr(resolveInitiativeBonus(m, parseInt(m.dex) || 10))}</div>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:12px;">
@@ -6410,7 +6587,8 @@ function buildMonsterDetailCard(m) {
                       padding:2px 7px;border-radius:10px;margin-left:6px;letter-spacing:.02em;
                       white-space:nowrap;">Cast at Level ${sp.castAtLevel}</span>`
             : ''
-          if (!fullSpell) return `<div style="padding:6px 8px;font-size:13px;color:#888;">${prefix}${sp.name}${castAtLevelBadge}</div>`
+          const caveatText = sp.caveat ? ` <span style="font-weight:normal;color:#888;">(${sp.caveat})</span>` : ''
+          if (!fullSpell) return `<div style="padding:6px 8px;font-size:13px;color:#888;">${prefix}${sp.name}${caveatText}${castAtLevelBadge}</div>`
           const id = 'mspell-' + sp.name.replace(/[^a-zA-Z0-9]/g, '-') + '-' + Math.random().toString(36).slice(2, 7)
           return `
             <div style="margin-bottom:4px;">
@@ -6419,7 +6597,7 @@ function buildMonsterDetailCard(m) {
                        display:flex;justify-content:space-between;align-items:center;"
                 onmouseover="this.style.background='#1a4a8a'"
                 onmouseout="this.style.background='#0f3460'">
-                <span style="font-size:13px;color:#e0d5c5;">${prefix}${sp.name}${castAtLevelBadge}</span>
+                <span style="font-size:13px;color:#e0d5c5;">${prefix}${sp.name}${caveatText}${castAtLevelBadge}</span>
                 <span style="font-size:11px;color:#888;background:#1A1C1E;padding:2px 8px;border-radius:3px;min-width:24px;text-align:center;">
                   ${(fullSpell.level === '0' || fullSpell.level === 0 || !fullSpell.level) ? 'C' : fullSpell.level}
                 </span>
@@ -6638,11 +6816,7 @@ function buildNPCDetailCard(npc) {
         <div style="background:#1A1C1E;padding:8px;border-radius:4px;text-align:center;">
           <div style="font-size:11px;color:#4a9a9a;letter-spacing:.08em;font-weight:700;
                       margin-bottom:3px;">INITIATIVE</div>
-          <div style="font-size:20px;font-weight:bold;">${(() => {
-            const dex = getAbility('dex')
-            const initMod = Math.floor((dex - 10) / 2)
-            return initMod >= 0 ? '+' + initMod : initMod
-          })()}</div>
+          <div style="font-size:20px;font-weight:bold;">${modStr(resolveInitiativeBonus(npc, getAbility('dex')))}</div>
         </div>
       </div>
       <div style="display:grid;grid-template-columns:repeat(6,1fr);gap:6px;margin-bottom:12px;">
@@ -6736,13 +6910,15 @@ function buildNPCDetailCard(npc) {
                       padding:2px 7px;border-radius:10px;margin-left:6px;letter-spacing:.02em;
                       white-space:nowrap;">Cast at Level ${castAtLevel}</span>`
             : ''
+          const caveat = typeof spell === 'object' ? spell.caveat : null
+          const caveatText = caveat ? ` <span style="font-weight:normal;color:#888;">(${caveat})</span>` : ''
           return `<div style="margin-bottom:4px;">
               <div onclick="const el=document.getElementById('${id}');el.style.display=el.style.display==='none'?'block':'none'"
                 style="background:#0f3460;padding:10px 14px;border-radius:4px;cursor:pointer;
                        display:flex;justify-content:space-between;align-items:center;"
                 onmouseover="this.style.background='#1a4a8a'"
                 onmouseout="this.style.background='#0f3460'">
-                <span style="font-size:13px;color:#e0d5c5;">${prefix}${fullSpell.name}${castAtLevelBadge}</span>
+                <span style="font-size:13px;color:#e0d5c5;">${prefix}${fullSpell.name}${caveatText}${castAtLevelBadge}</span>
                 <span style="font-size:11px;color:#888;background:#1A1C1E;padding:2px 8px;border-radius:3px;min-width:24px;text-align:center;">
                   ${levelBadge}
                 </span>
@@ -7144,7 +7320,8 @@ function buildPCDetailCard(pc) {
                       padding:2px 7px;border-radius:10px;margin-left:6px;letter-spacing:.02em;
                       white-space:nowrap;">Cast at Level ${sp.castAtLevel}</span>`
             : ''
-          if (!fullSpell) return `<div style="padding:6px 8px;font-size:13px;color:#888;">${prefix}${sp.name}${castAtLevelBadge}</div>`
+          const caveatText = sp.caveat ? ` <span style="font-weight:normal;color:#888;">(${sp.caveat})</span>` : ''
+          if (!fullSpell) return `<div style="padding:6px 8px;font-size:13px;color:#888;">${prefix}${sp.name}${caveatText}${castAtLevelBadge}</div>`
           const id = 'pcspell-' + sp.name.replace(/[^a-zA-Z0-9]/g, '-') + '-' + Math.random().toString(36).slice(2, 7)
           return `
             <div style="margin-bottom:4px;">
@@ -7153,7 +7330,7 @@ function buildPCDetailCard(pc) {
                        display:flex;justify-content:space-between;align-items:center;"
                 onmouseover="this.style.background='#1a4a8a'"
                 onmouseout="this.style.background='#0f3460'">
-                <span style="font-size:13px;color:#e0d5c5;">${prefix}${sp.name}${castAtLevelBadge}</span>
+                <span style="font-size:13px;color:#e0d5c5;">${prefix}${sp.name}${caveatText}${castAtLevelBadge}</span>
                 <span style="font-size:11px;color:#888;background:#1A1C1E;padding:2px 8px;border-radius:3px;min-width:24px;text-align:center;">
                   ${(fullSpell.level === '0' || fullSpell.level === 0 || !fullSpell.level) ? 'C' : fullSpell.level}
                 </span>
@@ -7305,11 +7482,14 @@ function renderSpells(container) {
 
   container.innerHTML = `
     <div style="display:flex;gap:12px;margin-bottom:12px;align-items:center;">
-      <input id="spell-search" type="text" placeholder="Search spells…" value="${spellFilters.query}"
-        style="flex:1;max-width:500px;padding:8px 12px;background:#5C5C5C;
-               border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-               border-radius:4px;font-size:14px;"
-        oninput="spellFilters.query=this.value;applySpellFilters()" />
+      <div style="position:relative;flex:1;max-width:500px;">
+        <input id="spell-search" type="text" placeholder="Search spells…" value="${spellFilters.query}"
+          style="width:100%;box-sizing:border-box;padding:8px 28px 8px 12px;background:#5C5C5C;
+                 border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
+                 border-radius:4px;font-size:14px;"
+          oninput="spellFilters.query=this.value;applySpellFilters()" />
+        ${searchClearBtn('spell-search', "spellFilters.query='';applySpellFilters()")}
+      </div>
       <button onclick="openSpellBuilder()"
         style="background:#1E231A;color:#909090;border:2px solid #445E22;padding:8px 16px;
                cursor:pointer;border-radius:4px;font-size:13px;font-family:var(--app-font);
@@ -7573,11 +7753,14 @@ function renderPlayers(container) {
   const archivedNpcs = compendiumData.npcs.filter(n => n.archived)
   container.innerHTML = `
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;flex-wrap:wrap;">
-      <input type="text" placeholder="Search characters…"
-        style="flex:1;min-width:200px;max-width:400px;padding:8px 12px;background:#5C5C5C;
-               border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-               border-radius:4px;font-size:14px;"
-        oninput="filterPlayers(this.value)" />
+      <div style="position:relative;flex:1;min-width:200px;max-width:400px;">
+        <input id="character-search" type="text" placeholder="Search characters…"
+          style="width:100%;box-sizing:border-box;padding:8px 28px 8px 12px;background:#5C5C5C;
+                 border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
+                 border-radius:4px;font-size:14px;"
+          oninput="filterPlayers(this.value)" />
+        ${searchClearBtn('character-search', "filterPlayers('')")}
+      </div>
     </div>
     <div style="background:#5C5C5C;border:4px solid #2E2F2D;border-radius:8px;padding:20px;margin-bottom:18px;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:${compendiumData.players.length > 0 ? '16px' : '0'};">
@@ -7861,6 +8044,10 @@ function persistNotes(scope) {
     const idx = enc.list[camp].findIndex(e => e.id === enc.current.id)
     if (idx >= 0) enc.list[camp][idx] = enc.current
     saveEncounters(enc.list)
+    // This writes the whole in-memory encounter to disk (not just the note), so
+    // resync the dirty baseline too - otherwise combatant edits made before adding
+    // the note would still read as "unsaved" after they'd already hit disk here.
+    captureEncSnapshot()
   }
 }
 
@@ -8567,6 +8754,43 @@ function splitSourceString(raw) {
   return merged.map(stripSourcePageRef).filter(Boolean)
 }
 
+// ── One-time migration: deprecated "Recharges after short rest" option ──────
+// The old `short_rest` limitedUsage type never actually produced a working
+// charge counter (mbRechargeNum/entryToBlob only recognized per_day/charges,
+// so charges/chargesCurrent/recharge all saved as null). The replacement
+// `short_rest_count` type shares the #/Day mechanism and actually works -
+// migrate any entity still carrying the old type so it gets a real counter
+// before the dropdown option is removed entirely.
+const SHORT_REST_MIGRATION_FIELDS = ['traits', 'actions', 'bonusActions', 'reactions', 'legendaryActions', 'lairActions']
+function hasShortRestLU(entity) {
+  return SHORT_REST_MIGRATION_FIELDS.some(field =>
+    (entity._draft?.[field] || []).some(e => e?.limitedUsage?.type === 'short_rest')
+  )
+}
+function migrateShortRestLU(entity) {
+  let changed = false
+  for (const field of SHORT_REST_MIGRATION_FIELDS) {
+    const draftArr = entity._draft?.[field]
+    const compactArr = entity[field]
+    if (!Array.isArray(draftArr)) continue
+    draftArr.forEach((draftEntry, i) => {
+      if (draftEntry?.limitedUsage?.type !== 'short_rest') return
+      const count = draftEntry.limitedUsage.count || 1
+      draftEntry.limitedUsage.type = 'short_rest_count'
+      draftEntry.limitedUsage.count = count
+      changed = true
+      const compactEntry = Array.isArray(compactArr)
+        ? (compactArr.find(c => c.name === draftEntry.name) || compactArr[i])
+        : null
+      if (compactEntry && compactEntry.charges == null) {
+        compactEntry.charges = count
+        compactEntry.chargesCurrent = count
+      }
+    })
+  }
+  return changed
+}
+
 // ── Auto-load ─────────────────────────────────────────────────────
 function autoLoad() {
   const savedCompendium = loadCompendium()
@@ -8606,9 +8830,13 @@ function autoLoad() {
         }
 
         // b) Migrate components: parse string into separate fields
-        // Run on ALL spells where verbal is undefined OR where verbal is false but components string exists
-        // (catches Format B XML that was imported before the parser update)
-        if (spell.verbal === undefined || (spell.verbal === false && spell.components)) {
+        // Run only if any of the four derived fields was never computed (catches Format B
+        // XML imported before the parser update, which could leave some of these undefined).
+        // Checking verbal===false here instead of undefined would misfire forever on any
+        // spell that genuinely has no verbal component - verbal=false is a legitimate,
+        // permanent value, not a sign of unmigrated data.
+        if (spell.verbal === undefined || spell.somatic === undefined ||
+            spell.material === undefined || spell.materials === undefined) {
           const comp = spell.components || ''
           spell.verbal = comp.includes('V')
           spell.somatic = comp.includes('S')
@@ -8825,8 +9053,22 @@ function autoLoad() {
         console.log(`[Damage Migration] Backfilled missing "plus" damage clause on ${damageMigratedCount} action(s)`)
       }
 
+      // One-time migration: deprecated "Recharges after short rest" -> #/Short Rest
+      let shortRestMigratedCount = 0
+      if (compendiumData.monsters.some(hasShortRestLU)) {
+        try {
+          saveSnapshot('pre-short-rest-migration', { monsters: compendiumData.monsters, spells: compendiumData.spells })
+        } catch (err) {
+          console.error('Could not save pre-short-rest-migration snapshot:', err)
+        }
+        for (const monster of compendiumData.monsters) {
+          if (migrateShortRestLU(monster)) shortRestMigratedCount++
+        }
+        console.log(`[Short Rest Migration] Converted ${shortRestMigratedCount} monster entry/entries from "Recharges after short rest" to "#/Short Rest"`)
+      }
+
       // Save if either cleanup or migration occurred
-      if (undefinedTagsCleaned > 0 || monstersMigrated > 0 || sourceMigratedCount > 0 || spellSourceNormalized > 0 || damageMigratedCount > 0) {
+      if (undefinedTagsCleaned > 0 || monstersMigrated > 0 || sourceMigratedCount > 0 || spellSourceNormalized > 0 || damageMigratedCount > 0 || shortRestMigratedCount > 0) {
         saveCompendium({ monsters: compendiumData.monsters, spells: compendiumData.spells })
       }
     } catch (err) {
@@ -8883,7 +9125,7 @@ function autoLoad() {
                     if (match) recharge = parseInt(match[1])
                   }
 
-                  const charges = lu.type === 'per_day' || lu.type === 'charges' ? (lu.count || null) : null
+                  const charges = isCountBasedLU(lu.type) ? (lu.count || null) : null
 
                   return {...t, charges, chargesCurrent: charges, recharge}
                 }
@@ -8904,7 +9146,7 @@ function autoLoad() {
                     if (match) recharge = parseInt(match[1])
                   }
 
-                  const charges = lu.type === 'per_day' || lu.type === 'charges' ? (lu.count || null) : null
+                  const charges = isCountBasedLU(lu.type) ? (lu.count || null) : null
 
                   return {...a, charges, chargesCurrent: charges, recharge}
                 }
@@ -8919,6 +9161,32 @@ function autoLoad() {
 
       if (migratedCount > 0) {
         console.log(`[Migration] Converted ${migratedCount} PC(s) to new format`)
+        saveCampaigns(compendiumData.campaigns)
+      }
+
+      // One-time migration: deprecated "Recharges after short rest" -> #/Short Rest
+      // (same as the compendium-side monster migration above, but for NPCs/PCs
+      // stored per-campaign)
+      let shortRestCampaignMigratedCount = 0
+      const allCampaignEntities = []
+      for (const campName in compendiumData.campaigns) {
+        const camp = compendiumData.campaigns[campName]
+        if (Array.isArray(camp)) {
+          allCampaignEntities.push(...camp)
+        } else {
+          allCampaignEntities.push(...(camp.players || []), ...(camp.npcs || []))
+        }
+      }
+      if (allCampaignEntities.some(hasShortRestLU)) {
+        try {
+          saveSnapshot('pre-short-rest-migration-campaigns', compendiumData.campaigns)
+        } catch (err) {
+          console.error('Could not save pre-short-rest-migration-campaigns snapshot:', err)
+        }
+        for (const entity of allCampaignEntities) {
+          if (migrateShortRestLU(entity)) shortRestCampaignMigratedCount++
+        }
+        console.log(`[Short Rest Migration] Converted ${shortRestCampaignMigratedCount} NPC/PC entry/entries from "Recharges after short rest" to "#/Short Rest"`)
         saveCampaigns(compendiumData.campaigns)
       }
 
@@ -8982,18 +9250,32 @@ function autoLoad() {
             let needsRefresh = false
             let fieldsToRefresh = []
 
-            // Check hpMax (preserve hpCurrent - that's combat state)
-            const sourceHpMax = parseInt(matchingPC.hpMax ?? matchingPC.hpValue ?? matchingPC._draft?.hpMax ?? matchingPC._draft?.hpValue)
-            if (sourceHpMax && combatant.hpMax !== sourceHpMax) {
-              needsRefresh = true
-              fieldsToRefresh.push(`hpMax: ${combatant.hpMax} -> ${sourceHpMax}`)
+            // Identity stats (hpMax/ac/abilities) are gated against a baseline of "the PC
+            // data we last synced from" (_syncedFrom), NOT against this combatant's current
+            // values - a combatant's own value may differ because it was deliberately
+            // customized for this specific saved encounter, which must not be treated as
+            // drift to correct. Only a genuine change on the PC's own sheet since the last
+            // sync should propagate. A combatant saved before this baseline existed has no
+            // _syncedFrom yet - settle it once using the old compare-against-current-value
+            // behavior, then baseline-gate from here on.
+            const sourceHpMax = parseInt(matchingPC.hpMax ?? matchingPC.hpValue ?? matchingPC._draft?.hpMax ?? matchingPC._draft?.hpValue) || null
+            const sourceAC = parseInt(matchingPC.acValue ?? matchingPC.ac ?? matchingPC._draft?.acValue ?? matchingPC._draft?.ac) || null
+            const sourceSnapshot = JSON.stringify({ hpMax: sourceHpMax, ac: sourceAC, abilities: matchingPC.abilities || null })
+
+            let needsIdentityRefresh
+            if (combatant._syncedFrom === undefined) {
+              const hpMismatch = sourceHpMax && combatant.hpMax !== sourceHpMax
+              const acMismatch = sourceAC && combatant.ac !== sourceAC
+              const abilitiesMismatch = matchingPC.abilities &&
+                JSON.stringify(combatant.abilities) !== JSON.stringify(matchingPC.abilities)
+              needsIdentityRefresh = !!(hpMismatch || acMismatch || abilitiesMismatch)
+            } else {
+              needsIdentityRefresh = combatant._syncedFrom !== sourceSnapshot
             }
 
-            // Check AC (PC Builder uses acValue, XML uses ac)
-            const sourceAC = parseInt(matchingPC.acValue ?? matchingPC.ac ?? matchingPC._draft?.acValue ?? matchingPC._draft?.ac)
-            if (sourceAC && combatant.ac !== sourceAC) {
+            if (needsIdentityRefresh) {
               needsRefresh = true
-              fieldsToRefresh.push(`ac: ${combatant.ac} -> ${sourceAC}`)
+              fieldsToRefresh.push(`identity stats (hpMax/ac/abilities) changed on PC sheet since last sync`)
             }
 
             // Check spell data (selectedSpells, spellSlots, etc.)
@@ -9012,31 +9294,6 @@ function autoLoad() {
             if (needsSpellSlots) {
               needsRefresh = true
               fieldsToRefresh.push(`spellSlots: null -> array`)
-            }
-
-            // Check abilities array
-            const abilitiesMatch = combatant.abilities && matchingPC.abilities &&
-              JSON.stringify(combatant.abilities) === JSON.stringify(matchingPC.abilities)
-            if (!abilitiesMatch && matchingPC.abilities) {
-              needsRefresh = true
-              fieldsToRefresh.push(`abilities: ${JSON.stringify(combatant.abilities)} -> ${JSON.stringify(matchingPC.abilities)}`)
-            }
-
-            // Check individual ability scores (for modifier calculations)
-            if (matchingPC.abilities) {
-              const expectedStr = parseInt(matchingPC.abilities[0]) || 10
-              const expectedDex = parseInt(matchingPC.abilities[1]) || 10
-              const expectedCon = parseInt(matchingPC.abilities[2]) || 10
-              const expectedInt = parseInt(matchingPC.abilities[3]) || 10
-              const expectedWis = parseInt(matchingPC.abilities[4]) || 10
-              const expectedCha = parseInt(matchingPC.abilities[5]) || 10
-
-              if (combatant.str !== expectedStr || combatant.dex !== expectedDex ||
-                  combatant.con !== expectedCon || combatant.int !== expectedInt ||
-                  combatant.wis !== expectedWis || combatant.cha !== expectedCha) {
-                needsRefresh = true
-                fieldsToRefresh.push(`ability scores (individual fields)`)
-              }
             }
 
             // Backfill notes if missing or empty (independent of other refresh checks)
@@ -9083,16 +9340,14 @@ function autoLoad() {
             if (needsRefresh) {
               console.log(`[Encounter Migration] Refreshing ${combatant.name} in "${encounter.name}"`)
 
-              // Refresh hpMax (preserve hpCurrent for in-combat damage state)
-              const sourceHpMax = parseInt(matchingPC.hpMax ?? matchingPC.hpValue ?? matchingPC._draft?.hpMax ?? matchingPC._draft?.hpValue)
-              if (sourceHpMax && combatant.hpMax !== sourceHpMax) {
-                combatant.hpMax = sourceHpMax
-              }
-
-              // Refresh AC (PC Builder uses acValue, XML uses ac)
-              const sourceAC = parseInt(matchingPC.acValue ?? matchingPC.ac ?? matchingPC._draft?.acValue ?? matchingPC._draft?.ac)
-              if (sourceAC && combatant.ac !== sourceAC) {
-                combatant.ac = sourceAC
+              // Apply identity-stat refresh only when the baseline check above actually
+              // found the PC's own sheet changed - not merely because some unrelated field
+              // (e.g. spell data) is what triggered needsRefresh for this combatant.
+              if (needsIdentityRefresh) {
+                if (sourceHpMax) combatant.hpMax = sourceHpMax
+                if (sourceAC) combatant.ac = sourceAC
+                if (matchingPC.abilities) combatant.abilities = [...matchingPC.abilities]
+                combatant._syncedFrom = sourceSnapshot
               }
 
               // Refresh spell data if missing
@@ -9123,30 +9378,24 @@ function autoLoad() {
                 combatant.spellSaveDC = matchingPC.spellSaveDC
               }
 
-              // Refresh abilities array
-              if (matchingPC.abilities) {
-                const abilitiesMatch = combatant.abilities &&
-                  JSON.stringify(combatant.abilities) === JSON.stringify(matchingPC.abilities)
-                if (!abilitiesMatch) {
-                  combatant.abilities = [...matchingPC.abilities]
+              // Refresh individual ability scores (for modifier calculations) - only
+              // alongside the identity-stat refresh above, for the same reason.
+              if (needsIdentityRefresh) {
+                if (matchingPC.abilities) {
+                  combatant.str = parseInt(matchingPC.abilities[0]) || 10
+                  combatant.dex = parseInt(matchingPC.abilities[1]) || 10
+                  combatant.con = parseInt(matchingPC.abilities[2]) || 10
+                  combatant.int = parseInt(matchingPC.abilities[3]) || 10
+                  combatant.wis = parseInt(matchingPC.abilities[4]) || 10
+                  combatant.cha = parseInt(matchingPC.abilities[5]) || 10
+                } else if (matchingPC.str !== undefined) {
+                  combatant.str = matchingPC.str || 10
+                  combatant.dex = matchingPC.dex || 10
+                  combatant.con = matchingPC.con || 10
+                  combatant.int = matchingPC.int || 10
+                  combatant.wis = matchingPC.wis || 10
+                  combatant.cha = matchingPC.cha || 10
                 }
-              }
-
-              // Refresh individual ability scores (for modifier calculations)
-              if (matchingPC.abilities) {
-                combatant.str = parseInt(matchingPC.abilities[0]) || 10
-                combatant.dex = parseInt(matchingPC.abilities[1]) || 10
-                combatant.con = parseInt(matchingPC.abilities[2]) || 10
-                combatant.int = parseInt(matchingPC.abilities[3]) || 10
-                combatant.wis = parseInt(matchingPC.abilities[4]) || 10
-                combatant.cha = parseInt(matchingPC.abilities[5]) || 10
-              } else if (matchingPC.str !== undefined) {
-                combatant.str = matchingPC.str || 10
-                combatant.dex = matchingPC.dex || 10
-                combatant.con = matchingPC.con || 10
-                combatant.int = matchingPC.int || 10
-                combatant.wis = matchingPC.wis || 10
-                combatant.cha = matchingPC.cha || 10
               }
 
               // Refresh trait uses/charges
@@ -9157,7 +9406,7 @@ function autoLoad() {
                   if (matchingTrait) {
                     // Get charges from source PC (check both direct field and limitedUsage)
                     const sourceCharges = matchingTrait.charges ??
-                      (matchingTrait.limitedUsage?.type === 'per_day' || matchingTrait.limitedUsage?.type === 'charges'
+                      (isCountBasedLU(matchingTrait.limitedUsage?.type)
                         ? matchingTrait.limitedUsage.count
                         : null)
                     const sourceChargesCurrent = matchingTrait.chargesCurrent ?? sourceCharges
@@ -9190,7 +9439,7 @@ function autoLoad() {
                   if (matchingAction) {
                     // Get charges from source PC (check both direct field and limitedUsage)
                     const sourceCharges = matchingAction.charges ??
-                      (matchingAction.limitedUsage?.type === 'per_day' || matchingAction.limitedUsage?.type === 'charges'
+                      (isCountBasedLU(matchingAction.limitedUsage?.type)
                         ? matchingAction.limitedUsage.count
                         : null)
                     const sourceChargesCurrent = matchingAction.chargesCurrent ?? sourceCharges
@@ -9345,11 +9594,16 @@ function autoLoad() {
                   }
                   // Otherwise preserve hpCurrent (real damage was taken)
 
-                  // Update traits and actions (deep copy to avoid reference issues)
-                  if (migratedCombatant.traits) {
+                  // Backfill traits/actions ONLY if this combat-state snapshot never
+                  // captured them at all (a very old save format). Once a combat-state
+                  // snapshot has its own traits/actions, they hold the live, correctly-
+                  // depleted chargesCurrent for an in-progress fight - overwriting them
+                  // from the template combatant (which doesn't track mid-combat usage)
+                  // would silently reset already-expended uses back to full on next launch.
+                  if ((!sc.traits || sc.traits.length === 0) && migratedCombatant.traits) {
                     sc.traits = JSON.parse(JSON.stringify(migratedCombatant.traits))
                   }
-                  if (migratedCombatant.actions) {
+                  if ((!sc.actions || sc.actions.length === 0) && migratedCombatant.actions) {
                     sc.actions = JSON.parse(JSON.stringify(migratedCombatant.actions))
                   }
 

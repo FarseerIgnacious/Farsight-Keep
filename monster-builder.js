@@ -163,9 +163,20 @@ function mbXpForCr(cr) {
   const entry = MB_CR_TABLE.find(e => e.cr === cr)
   return entry ? entry.xp.toLocaleString() : '—'
 }
+// Count-based limited-usage types: a numeric pool that the DM manually refills
+// with the +/- controls on the combatant card when the reset trigger occurs -
+// there's no automated "new day"/"short rest"/"long rest" button anywhere in the
+// app, so these all share the exact same charges/chargesCurrent mechanism and
+// differ only in their builder label.
+function isCountBasedLU(type) {
+  return type === 'per_day' || type === 'charges' || type === 'short_rest_count' || type === 'long_rest_count'
+}
+
 function mbLimitedStr(lu) {
   if (!lu || lu.type === 'none') return ''
   if (lu.type === 'per_day') return ` (${lu.count}/Day)`
+  if (lu.type === 'short_rest_count') return ` (${lu.count}/Short Rest)`
+  if (lu.type === 'long_rest_count') return ` (${lu.count}/Long Rest)`
   if (lu.type === 'short_rest') return ' (Recharge after Short Rest)'
   if (lu.type.startsWith('recharge_')) {
     const n = lu.type.split('_')[1]
@@ -207,7 +218,7 @@ function mbDefaultDraft() {
     savingThrows:[], skills:[],
     vulnerable:[], resist:[], immune:[], conditionImmune:[],
     senses:'', passive:'', languages:'', cr:'1',
-    traits:[], actions:[], reactions:[], legendaryActions:[], lairActions:[], bonusActions:[],
+    traits:[], actions:[], reactions:[], legendaryActions:[], legendaryActionUses:null, lairActions:[], bonusActions:[],
     spellSaveDC:null, spellAttackMod:null,
     spellSlots:[0,0,0,0,0,0,0,0,0], selectedSpells:[],
     environments:[], description:'',
@@ -685,8 +696,8 @@ function mbBuildCompendiumEntry(d) {
   function entryToBlob(e) {
     return {
       name: e.name, text: e.desc,
-      charges: e.limitedUsage.type === 'per_day' ? e.limitedUsage.count : null,
-      chargesCurrent: e.limitedUsage.type === 'per_day' ? e.limitedUsage.count : null,
+      charges: isCountBasedLU(e.limitedUsage.type) ? e.limitedUsage.count : null,
+      chargesCurrent: isCountBasedLU(e.limitedUsage.type) ? e.limitedUsage.count : null,
       recharge: mbRechargeNum(e.limitedUsage),
     }
   }
@@ -749,10 +760,11 @@ function mbBuildCompendiumEntry(d) {
     conditionImmune: (d.conditionImmune||[]).join(', '),
     senses: d.senses,
     passive: d.passive||'', languages: d.languages, cr: d.cr,
-    traits: (d.traits || []).map(entryToBlob),
+    traits: (d.traits || []).map(actionToBlob),
     actions: (d.actions || []).map(actionToBlob),
     reactions: (d.reactions || []).map(actionToBlob),
     legendaryActions: (d.legendaryActions || []).map(actionToBlob),
+    legendaryActionUses: d.legendaryActionUses ? parseInt(d.legendaryActionUses) || null : null,
     lairActions: (d.lairActions || []).map(actionToBlob),
     bonusActions: (d.bonusActions || []).map(actionToBlob),
     spellsAtWill: (d.selectedSpells||[]).filter(s=>s&&s.usage==='atwill').map(s=>s.name).join(','),
@@ -933,11 +945,14 @@ function mbCopyPickerPageHTML(backOnclick, searchHandlerName, resultsElId) {
       </h2>
     </div>
 
-    <input id="${resultsElId}-search" type="text" placeholder="Search monsters…"
-      oninput="${searchHandlerName}(this.value)"
-      style="width:100%;max-width:500px;padding:8px 12px;margin-bottom:16px;background:#5C5C5C;
-             border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
-             border-radius:4px;font-size:14px;display:block;" />
+    <div style="position:relative;max-width:500px;margin-bottom:16px;">
+      <input id="${resultsElId}-search" type="text" placeholder="Search monsters…"
+        oninput="${searchHandlerName}(this.value)"
+        style="width:100%;box-sizing:border-box;padding:8px 28px 8px 12px;background:#5C5C5C;
+               border:4px solid #2E2F2D;color:#1E231A;font-family:var(--app-font);
+               border-radius:4px;font-size:14px;display:block;" />
+      ${window.searchClearBtn(`${resultsElId}-search`, `${searchHandlerName}('')`)}
+    </div>
 
     <div id="${resultsElId}"></div>
   `
@@ -1062,11 +1077,13 @@ function renderMonsterBuilder() {
         ${mbCardWrap('CONDITION IMMUNITIES', mbRenderCondImmune())}
         ${mbCardWrap('SENSES &amp; PASSIVE PERCEPTION', mbRenderSenses())}
         ${mbCardWrap('LANGUAGES', mbRenderLanguages())}
-        ${mbCardWrap('TRAITS', `<div id="mb-sect-traits" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'traits')">${mbRenderAbilityGroup('traits', false)}</div>`)}
+        ${mbCardWrap('TRAITS', `<div id="mb-sect-traits" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'traits')">${mbRenderAbilityGroup('traits', true)}</div>`)}
         ${mbCardWrap('ACTIONS', `<div id="mb-sect-actions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'actions')">${mbRenderAbilityGroup('actions', true)}</div>`)}
         ${mbCardWrap('BONUS ACTIONS', `<div id="mb-sect-bonusActions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'bonusActions')">${mbRenderAbilityGroup('bonusActions', true)}</div>`)}
         ${mbCardWrap('REACTIONS', `<div id="mb-sect-reactions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'reactions')">${mbRenderAbilityGroup('reactions', true)}</div>`)}
-        ${mbCardWrap('LEGENDARY ACTIONS', `<div id="mb-sect-legendaryActions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'legendaryActions')">${mbRenderAbilityGroup('legendaryActions', true)}</div>`)}
+        ${mbCardWrap('LEGENDARY ACTIONS', `
+          ${mbRenderLegendaryActionUsesField()}
+          <div id="mb-sect-legendaryActions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'legendaryActions')">${mbRenderAbilityGroup('legendaryActions', true)}</div>`)}
         ${mbCardWrap('LAIR ACTIONS', `<div id="mb-sect-lairActions" data-section-container ondragover="event.preventDefault()" ondrop="mbDrop(event,'lairActions')">${mbRenderAbilityGroup('lairActions', true)}</div>`)}
         ${mbCardWrap('SPELLS', `<div id="mb-sect-Spells">${mbRenderSpells()}</div>`)}
         ${mbCardWrap('ENVIRONMENT', mbRenderEnvironments())}
@@ -1093,6 +1110,22 @@ function renderMonsterBuilder() {
 
 function mbCardWrap(title, body) {
   return `<div style="${MBS.card}"><div style="${MBS.cardHeader}">${title}</div>${body}</div>`
+}
+
+// Total legendary-action uses per round, shown as a counter on the combatant card.
+// Independent of any individual legendary action's own recharge/charges tracking -
+// left blank or 0 for villain/epic actions that don't use the standard count mechanic,
+// in which case no counter shows on the card at all.
+function mbRenderLegendaryActionUsesField() {
+  const d = mb.draft
+  return `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+      <label style="${MBS.label}margin-bottom:0;">USES PER ROUND</label>
+      <input type="text" inputmode="numeric" pattern="[0-9]*"
+        value="${d.legendaryActionUses ?? ''}" placeholder="3"
+        onchange="mb.draft.legendaryActionUses=this.value.replace(/[^0-9]/g,'')||null;mb.dirty=true"
+        style="${MBS.field}width:60px;text-align:center;" />
+    </div>`
 }
 
 // ── Drum-roll picker ─────────────────────────────────────────────
@@ -1946,15 +1979,16 @@ function mbRenderEntryEditor(entry, section, idx, withAttack) {
             <select onchange="mbDraftEntryLU('${section}',${idx},this.value)" style="${MBS.select}">
               <option value="none"${lu.type==='none'?' selected':''}>None</option>
               <option value="per_day"${lu.type==='per_day'?' selected':''}>#/Day</option>
+              <option value="short_rest_count"${lu.type==='short_rest_count'?' selected':''}>#/Short Rest</option>
+              <option value="long_rest_count"${lu.type==='long_rest_count'?' selected':''}>#/Long Rest</option>
               <option value="recharge_2"${lu.type==='recharge_2'?' selected':''}>Recharge 2–6</option>
               <option value="recharge_3"${lu.type==='recharge_3'?' selected':''}>Recharge 3–6</option>
               <option value="recharge_4"${lu.type==='recharge_4'?' selected':''}>Recharge 4–6</option>
               <option value="recharge_5"${lu.type==='recharge_5'?' selected':''}>Recharge 5–6</option>
               <option value="recharge_6"${lu.type==='recharge_6'?' selected':''}>Recharge 6</option>
-              <option value="short_rest"${lu.type==='short_rest'?' selected':''}>Recharge after Short Rest</option>
             </select>
           </div>
-          ${lu.type === 'per_day' ? `
+          ${isCountBasedLU(lu.type) ? `
             <div>
               <label style="${MBS.label}">COUNT</label>
               <input type="number" value="${lu.count||1}" min="1" max="99"
@@ -2196,33 +2230,24 @@ function mbRenderEntryEditor(entry, section, idx, withAttack) {
   `
 }
 
-// Optional "Cast at Level" dropdown for an already-added spell entry. Only offered
-// for spells with a real base level >= 1 (cantrips don't scale by slot level), and
-// only offers levels ABOVE the spell's own base level - "cast at its own level" is
-// meaningless and isn't a selectable option. Stores castAtLevel on the selectedSpells
-// entry - the same field the "(level X version)" free-text parsing uses - so
-// enrichSelectedSpells and the existing violet badge pick it up unchanged.
-function mbCastAtLevelControl(sp) {
-  const baseLevel = parseInt(sp.level)
-  if (!baseLevel || isNaN(baseLevel) || baseLevel < 1) return ''
-  const options = []
-  for (let lvl = baseLevel + 1; lvl <= 9; lvl++) options.push(lvl)
-  if (options.length === 0) return ''
+// Freeform caveat for an already-added spell entry (e.g. "Self only", "the hand is
+// Invisible", "cast at level 5"). Stored on the selectedSpells entry and displayed as
+// "(caveat text)" after the spell name everywhere spells are shown, matching the
+// existing convention for imported free-text annotations.
+function mbSpellCaveatControl(sp) {
   return `
-    <select onchange="mbSetSpellCastAtLevel(${sp._i}, this.value)"
-      style="${MBS.select}font-size:11px;padding:3px 6px;width:auto;">
-      <option value="">Cast at Level…</option>
-      ${options.map(lvl => `<option value="${lvl}" ${sp.castAtLevel === lvl ? 'selected' : ''}>Cast at Level ${lvl}</option>`).join('')}
-    </select>`
+    <input type="text" value="${mbEsc(sp.caveat || '')}" placeholder="Caveat…"
+      onchange="mbSetSpellCaveat(${sp._i}, this.value)"
+      style="${MBS.field}font-size:11px;padding:3px 6px;width:120px;">`
 }
 
-function mbSetSpellCastAtLevel(idx, value) {
+function mbSetSpellCaveat(idx, value) {
   if (!Array.isArray(mb.draft.selectedSpells)) return
   const sp = mb.draft.selectedSpells[idx]
   if (!sp) return
-  const lvl = parseInt(value)
-  if (value === '' || isNaN(lvl)) delete sp.castAtLevel
-  else sp.castAtLevel = lvl
+  const trimmed = value.trim()
+  if (trimmed) sp.caveat = trimmed
+  else delete sp.caveat
   mb.dirty = true
   mbRefreshSection('spells')
 }
@@ -2241,7 +2266,7 @@ function mbRenderSpells() {
     <div style="${MBS.itemRow}">
       <span style="flex:1;font-size:13px;color:#e0d5c5;">${mbEsc(sp.name)}</span>
       ${extra}
-      ${mbCastAtLevelControl(sp)}
+      ${mbSpellCaveatControl(sp)}
       ${rmBtn(sp._i)}
     </div>`
 
@@ -2311,10 +2336,13 @@ function mbRenderSpellPickerHtml() {
     <div style="margin-top:10px;background:#1A1C1E;border:1px solid #4587A2;
                 border-radius:6px;padding:12px;">
       <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
-        <input id="mb-spell-search" value="${mbEsc(mb.spellPickerQuery)}"
-          placeholder="Search spells…" autofocus
-          oninput="mbFilterSpells(this.value)"
-          style="${MBS.field}flex:1;background:#5C5C5C;border:4px solid #2E2F2D;color:#1E231A;">
+        <div style="position:relative;flex:1;">
+          <input id="mb-spell-search" value="${mbEsc(mb.spellPickerQuery)}"
+            placeholder="Search spells…" autofocus
+            oninput="mbFilterSpells(this.value)"
+            style="${MBS.field}width:100%;box-sizing:border-box;padding-right:28px;background:#5C5C5C;border:4px solid #2E2F2D;color:#1E231A;">
+          ${window.searchClearBtn('mb-spell-search', "mbFilterSpells('')")}
+        </div>
         <button onclick="mb.spellPickerOpen=false;mbRefreshSection('spells')"
           style="${MBS.btnSecondarySmall}">Close</button>
       </div>
@@ -2510,8 +2538,7 @@ function mbRefreshSection(dataKey) {
     else if (window.pcb && window.pcbRenderNotes) el.innerHTML = window.pcbRenderNotes()
   }
   else {
-    // Enable attack UI for all action types except traits
-    const withAttack = ['actions', 'bonusActions', 'reactions', 'legendaryActions', 'lairActions'].includes(dataKey)
+    const withAttack = ['traits', 'actions', 'bonusActions', 'reactions', 'legendaryActions', 'lairActions'].includes(dataKey)
     el.innerHTML = mbRenderAbilityGroup(dataKey, withAttack)
   }
 
@@ -2987,6 +3014,8 @@ function mbSave() {
         const recharge = a.recharge !== null ? a.recharge : (inferred.recharge ?? null)
         return { ...a, charges, recharge, chargesCurrent: charges !== null ? charges : null }
       }),
+      legendaryActionUses: entry.legendaryActionUses || null,
+      legendaryActionUsesCurrent: entry.legendaryActionUses || null,
       lairs: (entry.lairActions || []).map(a => {
         const inferred = (a.charges === null && a.recharge === null) ? parseUsesFromName(a.name) : {}
         const charges = a.charges !== null ? a.charges : (inferred.charges ?? null)
@@ -3028,6 +3057,15 @@ function mbSave() {
   }
 
   // Normal save to compendium
+  const trimmedName = d.name.trim()
+  const dupe = compendiumData.monsters.find(m =>
+    m.name !== mb.originalName && m.name.trim().toLowerCase() === trimmedName.toLowerCase()
+  )
+  if (dupe) {
+    showToast(`A monster named "${dupe.name}" already exists — rename before saving.`)
+    return
+  }
+
   const entry = mbBuildCompendiumEntry(d)
 
   const idx = compendiumData.monsters.findIndex(m => m.name === mb.originalName)
@@ -3215,6 +3253,7 @@ window.mbEsc = mbEsc
 // parseDamageString exposed by renderer.js - no need to re-assign here
 window.mbBuildCompendiumEntry = mbBuildCompendiumEntry
 window.mbCardWrap = mbCardWrap
+window.mbRenderLegendaryActionUsesField = mbRenderLegendaryActionUsesField
 window.mbRenderHeader = mbRenderHeader
 window.mbRenderCombat = mbRenderCombat
 window.mbRenderSpeedPicker = mbRenderSpeedPicker
@@ -3246,7 +3285,7 @@ window.mbCancelSpellPick = mbCancelSpellPick
 window.mbAddSpellWithUsage = mbAddSpellWithUsage
 window.mbRemoveSpell = mbRemoveSpell
 window.mbFilterSpells = mbFilterSpells
-window.mbSetSpellCastAtLevel = mbSetSpellCastAtLevel
+window.mbSetSpellCaveat = mbSetSpellCaveat
 window.mbRenderEnvironments = mbRenderEnvironments
 window.mbRefreshSection = mbRefreshSection
 window.mbUpdateHpAvg = mbUpdateHpAvg
